@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+glam = "0.34"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+base64 = "0.23"
+faer = "0.24"
+rayon = "1"
+clap = { version = "4", features = ["derive"] }
+uvcraft-core = { path = "crates/uvcraft-core" }
+uvcraft-algo = { path = "crates/uvcraft-algo" }
+uvcraft-io = { path = "crates/uvcraft-io" }
+uvcraft-commands = { path = "crates/uvcraft-commands" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

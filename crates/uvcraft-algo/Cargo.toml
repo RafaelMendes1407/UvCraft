@@ -1,0 +1,17 @@
+[package]
+name = "uvcraft-algo"
+description = "UvCraft algorithms: analysis, projections, unfold, seams, packing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+faer.workspace = true
+glam.workspace = true
+rayon.workspace = true
+serde.workspace = true
+uvcraft-core.workspace = true
+
+[lints]
+workspace = true

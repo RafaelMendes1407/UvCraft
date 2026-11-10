@@ -1,0 +1,17 @@
+[package]
+name = "uvcraft-io"
+description = "UvCraft file formats (OBJ, glTF)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+glam.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uvcraft-core.workspace = true
+
+[lints]
+workspace = true

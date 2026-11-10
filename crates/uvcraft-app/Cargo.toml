@@ -1,0 +1,25 @@
+[package]
+name = "uvcraft-app"
+description = "UvCraft desktop application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "uvcraft-app"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "clipboard", "wayland", "x11"] }
+bytemuck = { version = "1", features = ["derive"] }
+rfd = "0.18"
+image = { version = "0.25", default-features = false, features = ["png"] }
+glam.workspace = true
+uvcraft-core.workspace = true
+uvcraft-algo.workspace = true
+uvcraft-io.workspace = true
+uvcraft-commands.workspace = true
+
+[lints]
+workspace = true
