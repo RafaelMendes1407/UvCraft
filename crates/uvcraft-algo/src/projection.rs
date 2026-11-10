@@ -1,5 +1,7 @@
 //! Initial projections. Planar projections keep the UV topology and only set
-//! coordinates; box projection first cuts between faces facing different axes.
+//! coordinates; box projection first cuts between faces facing different axes;
+//! cylindrical and spherical projections cut each island where it wraps around
+//! the axis.
 
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,11 @@ pub enum Projection {
     Best,
     /// Each face along its dominant axis (±X, ±Y, ±Z); cuts between groups.
     Box,
+    /// Each island unrolled around a world axis through its bbox center.
+    Cylindrical(Axis),
+    /// Each island mapped by longitude/latitude around a world axis through
+    /// its bbox center.
+    Spherical(Axis),
 }
 
 /// Tangent basis (t, b) with t × b = n, so front faces keep their winding.
@@ -68,6 +75,13 @@ pub fn project(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize], mode: Projectio
         .flat_map(|&i| islands.faces(i).iter().map(|&f| f as usize))
         .collect();
 
+    if let Projection::Cylindrical(axis) | Projection::Spherical(axis) = mode {
+        let spherical = matches!(mode, Projection::Spherical(_));
+        let touched = wrap_project(mesh, uv, &islands, targets, axis, spherical);
+        fit_unit_square(uv, &touched);
+        return;
+    }
+
     // Per-face basis.
     let mut face_basis: Vec<(usize, (DVec3, DVec3))> = Vec::with_capacity(faces.len());
     match mode {
@@ -90,6 +104,7 @@ pub fn project(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize], mode: Projectio
                 face_basis.extend(islands.faces(i).iter().map(|&f| (f as usize, b)));
             }
         }
+        Projection::Cylindrical(_) | Projection::Spherical(_) => unreachable!(),
         Projection::Box => {
             let mut label = vec![usize::MAX; mesh.face_count()];
             for &f in &faces {
@@ -120,6 +135,139 @@ pub fn project(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize], mode: Projectio
     touched.sort_unstable();
     touched.dedup();
     fit_unit_square(uv, &touched);
+}
+
+/// Right-handed frame (e1, e2, axis): e1 × e2 = axis.
+fn axis_frame(axis: Axis) -> (DVec3, DVec3, DVec3) {
+    match axis {
+        Axis::X => (DVec3::Y, DVec3::Z, DVec3::X),
+        Axis::Y => (DVec3::Z, DVec3::X, DVec3::Y),
+        Axis::Z => (DVec3::X, DVec3::Y, DVec3::Z),
+    }
+}
+
+/// Cylindrical / spherical projection. Per island: the angle around the axis
+/// is measured from the middle of the largest angular gap of its vertices (so
+/// partial cylinders are not cut); each face unwraps its corners next to its
+/// own centroid angle, and edges whose sides disagree by a full turn are cut.
+/// u = angle × mean radius, v = height (cylinder) or latitude × mean radius
+/// (sphere), so outward-facing faces are not flipped. Corners on the axis
+/// (poles, cap centers) have no angle: each takes its face's angle and its own
+/// UV vertex, as in a latitude/longitude map. Returns the UV vertices written.
+fn wrap_project(
+    mesh: &Mesh,
+    uv: &mut UvLayer,
+    islands: &Islands,
+    targets: &[usize],
+    axis: Axis,
+    spherical: bool,
+) -> Vec<u32> {
+    use std::f64::consts::{PI, TAU};
+    let (e1, e2, a) = axis_frame(axis);
+    // Per corner: (angle, second coordinate before scaling, radius).
+    let mut theta = vec![f64::NAN; mesh.corner_count()];
+    let mut second = vec![0.0; mesh.corner_count()];
+    let mut scale_of = vec![1.0; mesh.corner_count()];
+    let mut on_axis = vec![false; mesh.corner_count()];
+    for &i in targets {
+        let faces = islands.faces(i);
+        let corners = || faces.iter().flat_map(|&f| mesh.face_corners(f as usize));
+        let (lo, hi) = corners().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), c| {
+            let p = mesh.corner_position(c);
+            (lo.min(p), hi.max(p))
+        });
+        let center = (lo + hi) / 2.0;
+        let raw = |p: DVec3| {
+            let d = p - center;
+            d.dot(e2).atan2(d.dot(e1))
+        };
+        // Largest gap between sorted vertex angles (the wrap-around gap included).
+        let mut angles: Vec<f64> = corners().map(|c| raw(mesh.corner_position(c))).collect();
+        angles.sort_by(f64::total_cmp);
+        angles.dedup();
+        let mut offset = 0.0;
+        if let (Some(&first), Some(&last)) = (angles.first(), angles.last()) {
+            let mut best = (first + TAU - last, last + (first + TAU - last) / 2.0);
+            for w in angles.windows(2) {
+                if w[1] - w[0] > best.0 {
+                    best = (w[1] - w[0], (w[0] + w[1]) / 2.0);
+                }
+            }
+            offset = best.1;
+        }
+        let rel = |p: DVec3| (raw(p) - offset).rem_euclid(TAU);
+        let n = corners().count().max(1) as f64;
+        let radius = corners()
+            .map(|c| {
+                let d = mesh.corner_position(c) - center;
+                if spherical {
+                    d.length()
+                } else {
+                    (d - a * d.dot(a)).length()
+                }
+            })
+            .sum::<f64>()
+            / n;
+        let radius = if radius > 0.0 { radius } else { 1.0 };
+        for &f in faces {
+            let f = f as usize;
+            let k = mesh.face_corners(f).len() as f64;
+            let centroid: DVec3 = mesh
+                .face_corners(f)
+                .map(|c| mesh.corner_position(c))
+                .sum::<DVec3>()
+                / k;
+            let tc = rel(centroid);
+            for c in mesh.face_corners(f) {
+                let p = mesh.corner_position(c);
+                let d = p - center;
+                if (d - a * d.dot(a)).length() <= 1e-9 * radius {
+                    on_axis[c] = true;
+                }
+                let mut t = if on_axis[c] { tc } else { rel(p) };
+                if t - tc > PI {
+                    t -= TAU;
+                } else if tc - t > PI {
+                    t += TAU;
+                }
+                theta[c] = t;
+                scale_of[c] = radius;
+                second[c] = if spherical {
+                    (d.dot(a) / d.length().max(1e-300)).clamp(-1.0, 1.0).asin() * radius
+                } else {
+                    d.dot(a)
+                };
+            }
+        }
+    }
+
+    let cuts: Vec<usize> = (0..mesh.edge_count())
+        .filter(|&e| {
+            edge_corner_pairs(mesh, e).is_some_and(|pairs| {
+                pairs.iter().any(|&(x, y)| {
+                    !theta[x].is_nan() && !theta[y].is_nan() && (theta[x] - theta[y]).abs() > PI
+                })
+            })
+        })
+        .collect();
+    cut_edges(mesh, uv, &cuts);
+    for (c, _) in on_axis.iter().enumerate().filter(|(_, p)| **p) {
+        uv.corner_uv[c] = uv.uvs.len() as u32;
+        uv.uvs.push(DVec2::ZERO);
+    }
+    uv.compact();
+
+    let mut touched = Vec::new();
+    for c in 0..mesh.corner_count() {
+        if !theta[c].is_nan() {
+            let i = uv.corner_uv[c];
+            uv.uvs[i as usize] = DVec2::new(theta[c] * scale_of[c], second[c]);
+            touched.push(i);
+        }
+    }
+    touched.sort_unstable();
+    touched.dedup();
+    touched
 }
 
 /// Uniformly scales and moves the given UV vertices into the 0–1 square.
@@ -214,5 +362,130 @@ mod tests {
         let r = analyze(&q, &quv, &Islands::compute(&q, &quv), 1024);
         assert_eq!(r.flipped_islands, 0);
         assert!((r.max_angle_distortion - 1.0).abs() < 1e-9);
+    }
+
+    /// Open tube around Y: `seg` segments around, `rows` quads tall, radius 1.
+    fn tube(seg: usize, rows: usize, axis_offset: f64) -> (Mesh, UvLayer) {
+        let mut p = Vec::new();
+        for r in 0..=rows {
+            for k in 0..seg {
+                let t = std::f64::consts::TAU * k as f64 / seg as f64;
+                p.push(DVec3::new(t.sin() + axis_offset, r as f64 * 0.3, t.cos()));
+            }
+        }
+        let mut faces = Vec::new();
+        for r in 0..rows {
+            for k in 0..seg {
+                let v = |r: usize, k: usize| (r * seg + k % seg) as u32;
+                // Outward-facing: counter-clockwise seen from outside.
+                faces.push([v(r, k), v(r, k + 1), v(r + 1, k + 1), v(r + 1, k)]);
+            }
+        }
+        let m = Mesh::new(p, &faces).unwrap();
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..m.corner_count())
+                .map(|c| m.corner_vertex(c) as u32)
+                .collect(),
+            uvs: vec![DVec2::ZERO; m.vertex_count()],
+        };
+        (m, uv)
+    }
+
+    #[test]
+    fn cylindrical_unrolls_a_tube_with_one_seam() {
+        let (m, mut uv) = tube(32, 4, 5.0);
+        project(&m, &mut uv, &[0], Projection::Cylindrical(Axis::Y));
+        let isl = Islands::compute(&m, &uv);
+        assert_eq!(isl.count(), 1);
+        let seams = (0..m.edge_count())
+            .filter(|&e| uv.edge_kind(&m, e) == EdgeKind::Seam)
+            .count();
+        assert_eq!(seams, 4, "one vertical line of 4 edges");
+        let r = analyze(&m, &uv, &isl, 1024);
+        assert_eq!(r.flipped_islands, 0);
+        assert!(r.max_angle_distortion < 1.01, "{}", r.max_angle_distortion);
+    }
+
+    #[test]
+    fn cylindrical_does_not_cut_a_partial_tube() {
+        let (m, uv0) = tube(32, 2, 0.0);
+        // Keep the half of the tube around the ±π line (z < 0), as its own mesh.
+        let faces: Vec<[u32; 4]> = (0..m.face_count())
+            .filter(|&f| m.face_corners(f).all(|c| m.corner_position(c).z <= 1e-9))
+            .map(|f| {
+                let v: Vec<u32> = m
+                    .face_corners(f)
+                    .map(|c| m.corner_vertex(c) as u32)
+                    .collect();
+                [v[0], v[1], v[2], v[3]]
+            })
+            .collect();
+        let half = Mesh::new(m.positions().to_vec(), &faces).unwrap();
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..half.corner_count())
+                .map(|c| half.corner_vertex(c) as u32)
+                .collect(),
+            uvs: uv0.uvs.clone(),
+        };
+        project(&half, &mut uv, &[0], Projection::Cylindrical(Axis::Y));
+        let seams = (0..half.edge_count())
+            .filter(|&e| uv.edge_kind(&half, e) == EdgeKind::Seam)
+            .count();
+        assert_eq!(seams, 0);
+    }
+
+    #[test]
+    fn spherical_maps_a_uv_sphere_without_flips() {
+        let (rings, seg) = (12, 24);
+        let mut p = vec![DVec3::new(0.0, -1.0, 0.0)];
+        for r in 1..rings {
+            let phi = std::f64::consts::PI * r as f64 / rings as f64 - std::f64::consts::FRAC_PI_2;
+            for k in 0..seg {
+                let t = std::f64::consts::TAU * k as f64 / seg as f64;
+                p.push(DVec3::new(
+                    phi.cos() * t.sin(),
+                    phi.sin(),
+                    phi.cos() * t.cos(),
+                ));
+            }
+        }
+        p.push(DVec3::new(0.0, 1.0, 0.0));
+        let top = (p.len() - 1) as u32;
+        let v = |r: usize, k: usize| (1 + (r - 1) * seg + k % seg) as u32;
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        for k in 0..seg {
+            tris.push([0, v(1, k + 1), v(1, k)]);
+            tris.push([top, v(rings - 1, k), v(rings - 1, k + 1)]);
+        }
+        let mut quads: Vec<[u32; 4]> = Vec::new();
+        for r in 1..rings - 1 {
+            for k in 0..seg {
+                quads.push([v(r, k), v(r, k + 1), v(r + 1, k + 1), v(r + 1, k)]);
+            }
+        }
+        let faces: Vec<Vec<u32>> = tris
+            .iter()
+            .map(|t| t.to_vec())
+            .chain(quads.iter().map(|q| q.to_vec()))
+            .collect();
+        let m = Mesh::new(p, &faces).unwrap();
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..m.corner_count())
+                .map(|c| m.corner_vertex(c) as u32)
+                .collect(),
+            uvs: vec![DVec2::ZERO; m.vertex_count()],
+        };
+        project(&m, &mut uv, &[0], Projection::Spherical(Axis::Y));
+        let isl = Islands::compute(&m, &uv);
+        assert_eq!(isl.count(), 1);
+        let r = analyze(&m, &uv, &isl, 1024);
+        assert_eq!(r.flipped_triangles, 0);
+        // Latitude/longitude stretches u by 1/cos(latitude): conformal at the
+        // equator, growing towards the poles (≈ 1.46 on average here).
+        assert!(r.mean_angle_distortion < 1.5, "{}", r.mean_angle_distortion);
+        assert_eq!(r.degenerate_triangles, 0);
     }
 }

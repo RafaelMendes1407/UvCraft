@@ -77,7 +77,7 @@ Complete list of planned UvCraft features, based on the RizomUV feature set (`Ri
 
 - [ ] Modes: vertex, edge, face, island, object — M2 · D1
 - [ ] Conversion between modes — M2 · D1
-- [ ] Click, box, lasso selection — M2 · D2 · wgpu ID buffer picking
+- [ ] Click, box, lasso selection — M2 · D2 · wgpu ID buffer picking (click + box done; lasso and occlusion-aware box in 3D missing)
 - [ ] Paint (brush) selection — M3 · D2
 - [ ] Grow / shrink — M2 · D1
 - [ ] Edge loop and ring — M2 · D2 · quad traversal, fallback heuristic on triangles
@@ -87,7 +87,7 @@ Complete list of planned UvCraft features, based on the RizomUV feature set (`Ri
 - [ ] Select by distortion and by texel density — M3 · D1
 - [ ] Select overlapping, flipped, out-of-tile islands — M3 · D1
 - [ ] Select similar islands — M3 · D3 · topology signature + shape match
-- [ ] Invert, select all / none — M2 · D1
+- [x] Invert, select all / none — M2 · D1
 - [ ] Saved selection sets — M3 · D1
 - [ ] Hide / unhide / isolate — M2 · D1
 
@@ -131,8 +131,8 @@ Complete list of planned UvCraft features, based on the RizomUV feature set (`Ri
 
 - [x] Planar (axis) — M1 · D1
 - [x] Box — M1 · D1
-- [ ] Cylindrical — M3 · D1
-- [ ] Spherical — M3 · D1
+- [x] Cylindrical — M3 · D1
+- [x] Spherical — M3 · D1
 - [ ] From camera — M3 · D1
 - [x] By average normal — M3 · D1
 
@@ -167,7 +167,7 @@ Complete list of planned UvCraft features, based on the RizomUV feature set (`Ri
 ## 12. Packing
 
 - [x] Bounding-box packing with padding and margin (baseline) — M1 · D2
-- [ ] Raster (bitmask) packing with rotation — M1 · D3
+- [x] Raster (bitmask) packing with rotation — M1 · D3
 - [ ] Padding / margin in pixels or UV units — M1 · D1
 - [ ] Rotation options: none, 90° steps, custom angle, free — M3 · D2
 - [ ] Allow mirroring for better fit — M3 · D1

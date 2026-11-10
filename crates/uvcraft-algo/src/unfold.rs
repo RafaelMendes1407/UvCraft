@@ -6,7 +6,7 @@
 //! Two vertices are pinned; the normal equations are solved with a sparse
 //! Cholesky factorization (faer). Islands are independent and run in parallel.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use faer::linalg::solvers::Solve;
 use faer::sparse::{SparseColMat, Triplet};
@@ -63,7 +63,8 @@ fn unfold_island(mesh: &Mesh, uv: &UvLayer, faces: &[u32]) -> Outcome {
     let mut local: HashMap<u32, usize> = HashMap::new();
     let mut ids: Vec<u32> = Vec::new();
     let mut pos3: Vec<DVec3> = Vec::new();
-    let mut boundary: HashSet<usize> = HashSet::new();
+    // Ordered, so pin choice (ties included) is deterministic.
+    let mut boundary: BTreeSet<usize> = BTreeSet::new();
     for &f in faces {
         for c in mesh.face_corners(f as usize) {
             let k = uv.corner_uv[c];

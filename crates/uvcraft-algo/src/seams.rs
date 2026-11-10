@@ -4,7 +4,7 @@
 //! means splitting UV vertices and welding means merging them.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 
 use glam::DVec2;
 use uvcraft_core::{EdgeKind, Islands, Mesh, UvLayer};
@@ -190,8 +190,9 @@ pub fn weld_edges(mesh: &Mesh, uv: &mut UvLayer, edges: &[usize]) -> usize {
         for &(x, y) in &pairs {
             union(&mut parent, uv.corner_uv[x], uv.corner_uv[y]);
         }
-        let mut sum: HashMap<u32, (DVec2, f64)> = HashMap::new();
-        let mut members: HashSet<u32> = HashSet::new();
+        // Ordered containers: the averages must not depend on hash order.
+        let mut sum: BTreeMap<u32, (DVec2, f64)> = BTreeMap::new();
+        let mut members: BTreeSet<u32> = BTreeSet::new();
         for &(x, y) in &pairs {
             members.insert(uv.corner_uv[x]);
             members.insert(uv.corner_uv[y]);

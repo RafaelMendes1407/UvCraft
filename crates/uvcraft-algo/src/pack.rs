@@ -1,16 +1,28 @@
 //! Island layout: orientation, texel density and packing.
 //!
-//! Packing (baseline): islands are optionally rotated to their minimum-area
-//! bounding rectangle and laid flat, then placed on shelves (sorted by height)
-//! inside the 0–1 tile. One uniform scale for all islands keeps relative texel
-//! density; it is the largest scale that fits, found by bisection. Padding and
+//! Packing: islands are optionally rotated to their minimum-area bounding
+//! rectangle, then placed inside the 0–1 tile with one uniform scale (which
+//! keeps relative texel density), the largest one that fits. Padding and
 //! margin are in pixels at the given resolution.
+//! - [`PackMethod::Raster`] (default): bitmask packing that fills holes and
+//!   concavities and tries 90° rotations (see [`raster`]).
+//! - [`PackMethod::Shelf`]: bounding boxes on shelves; fast, lower coverage.
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use uvcraft_core::{Islands, Mesh, UvLayer};
 
 use crate::analysis::texel_density;
+
+pub mod raster;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackMethod {
+    #[default]
+    Raster,
+    Shelf,
+}
 
 fn default_padding() -> f64 {
     4.0
@@ -34,9 +46,12 @@ pub struct PackOptions {
     /// Rotate each island to its minimum-area bounding rectangle.
     #[serde(default = "yes")]
     pub orient: bool,
-    /// Lay each island flat (width ≥ height) by rotating 90° when needed.
+    /// Shelf: lay each island flat (width ≥ height). Raster: try all four
+    /// 90° rotations.
     #[serde(default = "yes")]
     pub rotate_90: bool,
+    #[serde(default)]
+    pub method: PackMethod,
 }
 
 impl Default for PackOptions {
@@ -47,6 +62,7 @@ impl Default for PackOptions {
             resolution: default_resolution(),
             orient: true,
             rotate_90: true,
+            method: PackMethod::Raster,
         }
     }
 }
@@ -157,7 +173,7 @@ pub fn pack(
             rot = DVec2::from_angle(min_area_rect_angle(&pts));
         }
         let (lo, hi) = bbox(pts.iter().map(|&p| rot.rotate(p)));
-        if opts.rotate_90 && (hi - lo).y > (hi - lo).x {
+        if opts.rotate_90 && opts.method == PackMethod::Shelf && (hi - lo).y > (hi - lo).x {
             rot = DVec2::Y.rotate(rot); // extra +90°
         }
         let (lo, hi) = bbox(pts.iter().map(|&p| rot.rotate(p)));
@@ -165,6 +181,12 @@ pub fn pack(
             uv.uvs[k as usize] = rot.rotate(uv.uvs[k as usize]) - lo;
         }
         items.push((ids, hi - lo));
+    }
+
+    if opts.method == PackMethod::Raster
+        && pack_raster(mesh, uv, islands, targets, &items, opts, avail, margin, pad)
+    {
+        return;
     }
 
     let mut order: Vec<usize> = (0..items.len()).collect();
@@ -212,6 +234,60 @@ pub fn pack(
             *p = DVec2::splat(margin) + at + *p * lo;
         }
     }
+}
+
+/// Cells per side of the raster grid: about 2 px per cell, capped for speed.
+fn raster_cells(resolution: u32) -> usize {
+    (resolution as usize / 2).clamp(64, 1024)
+}
+
+/// Raster packing of normalized islands; `false` if it could not place them
+/// (the caller then falls back to shelves).
+#[allow(clippy::too_many_arguments)]
+fn pack_raster(
+    mesh: &Mesh,
+    uv: &mut UvLayer,
+    islands: &Islands,
+    targets: &[usize],
+    items: &[(Vec<u32>, DVec2)],
+    opts: &PackOptions,
+    avail: f64,
+    margin: f64,
+    pad: f64,
+) -> bool {
+    // Local index of each UV vertex within its island.
+    let mut local = vec![u32::MAX; uv.uvs.len()];
+    let shapes: Vec<raster::Shape> = targets
+        .iter()
+        .zip(items)
+        .map(|(&i, (ids, _))| {
+            for (n, &k) in ids.iter().enumerate() {
+                local[k as usize] = n as u32;
+            }
+            let tris = islands
+                .faces(i)
+                .iter()
+                .flat_map(|&f| mesh.fan_triangles(f as usize))
+                .map(|t| t.map(|c| local[uv.corner_uv[c] as usize]))
+                .collect();
+            raster::Shape {
+                pts: ids.iter().map(|&k| uv.uvs[k as usize]).collect(),
+                tris,
+            }
+        })
+        .collect();
+    let g = raster_cells(opts.resolution);
+    let Some((scale, placements)) = raster::pack(&shapes, avail, margin, pad, g, opts.rotate_90)
+    else {
+        return false;
+    };
+    for ((ids, _), p) in items.iter().zip(&placements) {
+        for &k in ids {
+            let q = &mut uv.uvs[k as usize];
+            *q = raster::rotate(*q, p.rot) * scale + p.offset;
+        }
+    }
+    true
 }
 
 /// (unsigned UV area, 3D area) of an island.
@@ -358,5 +434,123 @@ mod tests {
         let r = analyze(&m, &uv, &isl, 1024);
         assert!((r.islands[0].texel_density - 100.0).abs() < 1e-9);
         assert!((r.islands[1].texel_density - 100.0).abs() < 1e-9);
+    }
+
+    /// `n` L-shaped planar islands (3 unit quads each), UVs = XY.
+    fn l_shapes(n: usize) -> (Mesh, UvLayer) {
+        let mut pos = Vec::new();
+        let mut faces = Vec::new();
+        for k in 0..n {
+            let z = k as f64;
+            let b = pos.len() as u32;
+            // 0 1 2 / 3 4 5 / 6 7 8 grid vertices, minus the top-right quad.
+            for y in 0..3 {
+                for x in 0..3 {
+                    pos.push(DVec3::new(x as f64, y as f64, z));
+                }
+            }
+            for (x, y) in [(0, 0), (1, 0), (0, 1)] {
+                let v = |dx: u32, dy: u32| b + (y + dy) * 3 + x + dx;
+                faces.push([v(0, 0), v(1, 0), v(1, 1), v(0, 1)]);
+            }
+        }
+        let m = Mesh::new(pos, &faces).unwrap();
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..m.corner_count())
+                .map(|c| m.corner_vertex(c) as u32)
+                .collect(),
+            uvs: m.positions().iter().map(|p| p.truncate()).collect(),
+        };
+        (m, uv)
+    }
+
+    fn seg_dist(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> f64 {
+        let cross = |o: DVec2, p: DVec2, q: DVec2| (p - o).perp_dot(q - o);
+        let (d1, d2) = (cross(a, b, c), cross(a, b, d));
+        let (d3, d4) = (cross(c, d, a), cross(c, d, b));
+        if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+            return 0.0;
+        }
+        let pd = |p: DVec2, s0: DVec2, s1: DVec2| {
+            let e = s1 - s0;
+            let t = ((p - s0).dot(e) / e.length_squared().max(1e-300)).clamp(0.0, 1.0);
+            p.distance(s0 + e * t)
+        };
+        pd(a, c, d)
+            .min(pd(b, c, d))
+            .min(pd(c, a, b))
+            .min(pd(d, a, b))
+    }
+
+    /// Smallest gap between two islands' triangles (0 if they overlap).
+    fn gap(m: &Mesh, uv: &UvLayer, isl: &Islands, i: usize, j: usize) -> f64 {
+        let tris = |k: usize| -> Vec<[DVec2; 3]> {
+            isl.faces(k)
+                .iter()
+                .flat_map(|&f| m.fan_triangles(f as usize))
+                .map(|t| t.map(|c| uv.uv_at_corner(c)))
+                .collect()
+        };
+        let inside = |p: DVec2, t: &[DVec2; 3]| {
+            let s = [0, 1, 2].map(|k| (t[(k + 1) % 3] - t[k]).perp_dot(p - t[k]));
+            s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)
+        };
+        let (a, b) = (tris(i), tris(j));
+        let mut best = f64::INFINITY;
+        for s in &a {
+            for t in &b {
+                if inside(s[0], t) || inside(t[0], s) {
+                    return 0.0;
+                }
+                for x in 0..3 {
+                    for y in 0..3 {
+                        best = best.min(seg_dist(s[x], s[(x + 1) % 3], t[y], t[(y + 1) % 3]));
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn raster_packs_concave_islands_tightly_and_safely() {
+        let (m, uv0) = l_shapes(12);
+        let isl = Islands::compute(&m, &uv0);
+        assert_eq!(isl.count(), 12);
+        let all: Vec<usize> = (0..12).collect();
+        let coverage = |method: PackMethod| {
+            let mut uv = uv0.clone();
+            let opts = PackOptions {
+                resolution: 512,
+                method,
+                ..Default::default()
+            };
+            pack(&m, &mut uv, &isl, &all, &opts);
+            (analyze(&m, &uv, &isl, 512).uv_area, uv)
+        };
+        let (shelf, _) = coverage(PackMethod::Shelf);
+        let (raster, uv) = coverage(PackMethod::Raster);
+        assert!(raster > shelf * 1.15, "raster {raster} vs shelf {shelf}");
+
+        let (pad, margin) = (4.0 / 512.0, 4.0 / 512.0);
+        for p in uv.corner_uv.iter().map(|&k| uv.uvs[k as usize]) {
+            assert!(
+                p.min_element() >= margin - 1e-9 && p.max_element() <= 1.0 - margin + 1e-9,
+                "{p}"
+            );
+        }
+        for i in 0..12 {
+            for j in i + 1..12 {
+                let g = gap(&m, &uv, &isl, i, j);
+                assert!(g >= pad - 1e-9, "islands {i} and {j} are {g} apart");
+            }
+        }
+        let r = analyze(&m, &uv, &isl, 512);
+        assert!(
+            (r.max_area_distortion - 1.0).abs() < 1e-9,
+            "uniform scale, rigid moves"
+        );
+        assert_eq!(r.flipped_islands, 0, "rotations only, no mirroring");
     }
 }

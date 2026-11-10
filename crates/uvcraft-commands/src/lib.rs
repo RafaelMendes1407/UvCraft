@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use glam::{DMat2, DVec2};
 use serde::{Deserialize, Serialize};
 use uvcraft_algo::analysis::{self, Report};
-use uvcraft_algo::pack::{self, PackOptions};
+use uvcraft_algo::pack::{self, PackMethod, PackOptions};
 use uvcraft_algo::projection::{self, Projection};
 use uvcraft_algo::{seams, unfold};
 use uvcraft_core::{Islands, Mesh, UvLayer};
@@ -111,6 +111,8 @@ pub enum Command {
         orient: bool,
         #[serde(default = "yes")]
         rotate_90: bool,
+        #[serde(default)]
+        method: PackMethod,
     },
     /// Scale islands to a texel density (pixels per 3D unit at `resolution`).
     SetTexelDensity {
@@ -410,6 +412,7 @@ impl Session {
                 resolution,
                 orient,
                 rotate_90,
+                method,
             } => {
                 let options = PackOptions {
                     padding_px: *padding_px,
@@ -417,6 +420,7 @@ impl Session {
                     resolution: *resolution,
                     orient: *orient,
                     rotate_90: *rotate_90,
+                    method: *method,
                 };
                 if options.padding_px < 0.0 || options.margin_px < 0.0 || options.resolution == 0 {
                     return Err(CommandError::InvalidArgument(

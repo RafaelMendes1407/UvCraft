@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 use eframe::egui_wgpu::RenderState;
 use glam::{DVec2, Vec2, Vec3};
+use uvcraft_algo::pack::PackMethod;
 use uvcraft_algo::projection::{Axis, Projection};
 use uvcraft_algo::seams;
 use uvcraft_commands::{Command, Outcome, Pivot, Session};
@@ -52,6 +53,8 @@ pub struct App {
     sel_faces: Vec<bool>,
     sel_edges: Vec<bool>,
     last_vertex: Option<usize>,
+    /// Box selection in progress: (view, start in view-local points).
+    box_start: Option<(usize, Vec2)>,
 
     color_mode: ColorMode,
     wireframe: bool,
@@ -61,6 +64,8 @@ pub struct App {
     select_angle: f64,
     padding: f64,
     margin: f64,
+    pack_method: PackMethod,
+    pack_rotate: bool,
     resolution: u32,
     density: f64,
 
@@ -96,8 +101,11 @@ impl App {
             select_angle: 60.0,
             padding: 4.0,
             margin: 4.0,
+            pack_method: PackMethod::Raster,
+            pack_rotate: true,
             resolution: 2048,
             density: 512.0,
+            box_start: None,
             status: "Open a mesh (File ▸ Open, Ctrl+O): .obj, .gltf or .glb".into(),
             status_error: false,
             screenshot: startup.screenshot.map(|path| Screenshot {
@@ -278,6 +286,33 @@ impl App {
         self.gpu_dirty = true;
     }
 
+    fn select_all(&mut self) {
+        match self.mode {
+            SelectMode::Islands => self.sel_faces.iter_mut().for_each(|s| *s = true),
+            SelectMode::Edges => self.sel_edges.iter_mut().for_each(|s| *s = true),
+        }
+        self.gpu_dirty = true;
+    }
+
+    /// Islands mode: flips whole islands. Edges mode: flips every edge.
+    fn invert_selection(&mut self) {
+        match self.mode {
+            SelectMode::Islands => {
+                let Some(scene) = &self.scene else { return };
+                for i in 0..scene.islands.count() {
+                    let faces = scene.islands.faces(i);
+                    let on = !faces.iter().any(|&f| self.sel_faces[f as usize]);
+                    for &f in faces {
+                        self.sel_faces[f as usize] = on;
+                    }
+                }
+            }
+            SelectMode::Edges => self.sel_edges.iter_mut().for_each(|s| *s = !*s),
+        }
+        self.last_vertex = None;
+        self.gpu_dirty = true;
+    }
+
     fn clear_selection(&mut self) {
         self.sel_faces.iter_mut().for_each(|s| *s = false);
         self.sel_edges.iter_mut().for_each(|s| *s = false);
@@ -298,6 +333,20 @@ impl App {
     // ------------------------------------------------------------ UI
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        let (all, invert) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::COMMAND, Key::A),
+                i.consume_key(Modifiers::COMMAND, Key::I),
+            )
+        });
+        if !ctx.egui_wants_keyboard_input() {
+            if all {
+                self.select_all();
+            }
+            if invert {
+                self.invert_selection();
+            }
+        }
         let (open, save, undo, redo, frame, cut, weld, unfold, pack, clear) = ctx.input_mut(|i| {
             let cmd = Modifiers::COMMAND;
             (
@@ -361,7 +410,15 @@ impl App {
             margin_px: self.margin,
             resolution: self.resolution,
             orient: true,
-            rotate_90: true,
+            rotate_90: self.pack_rotate,
+            method: self.pack_method,
+        });
+    }
+
+    fn project(&mut self, mode: Projection) {
+        self.execute(Command::Project {
+            islands: self.target_islands(),
+            mode,
         });
     }
 
@@ -425,20 +482,24 @@ impl App {
             });
             ui.label(
                 egui::RichText::new(match self.mode {
-                    SelectMode::Islands => "Click: select · Shift: add/remove · Esc: clear",
+                    SelectMode::Islands => {
+                        "Click/drag box: select · Shift: add · Ctrl+drag: remove"
+                    }
                     SelectMode::Edges => {
-                        "Click: select · Shift: add/remove · Ctrl: path from last · Esc: clear"
+                        "Click/drag box: select · Shift: add · Ctrl+click: path from last"
                     }
                 })
                 .small()
                 .weak(),
             );
             ui.horizontal(|ui| {
-                if ui.button("All islands").clicked() {
-                    self.sel_faces.iter_mut().for_each(|s| *s = true);
-                    self.gpu_dirty = true;
+                if ui.button("All").on_hover_text("Ctrl+A").clicked() {
+                    self.select_all();
                 }
-                if ui.button("Clear").clicked() {
+                if ui.button("Invert").on_hover_text("Ctrl+I").clicked() {
+                    self.invert_selection();
+                }
+                if ui.button("Clear").on_hover_text("Esc").clicked() {
                     self.clear_selection();
                 }
             });
@@ -525,21 +586,46 @@ impl App {
                     .small()
                     .weak(),
             );
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 ui.label("Project:");
-                for (label, mode) in [
-                    ("Box", Projection::Box),
-                    ("Best", Projection::Best),
-                    ("X", Projection::Planar(Axis::X)),
-                    ("Y", Projection::Planar(Axis::Y)),
-                    ("Z", Projection::Planar(Axis::Z)),
+                for (label, mode, tip) in [
+                    ("Box", Projection::Box, "Each face along its dominant axis"),
+                    (
+                        "Best",
+                        Projection::Best,
+                        "Each island along its average normal",
+                    ),
                 ] {
-                    if ui.button(label).clicked() {
-                        self.execute(Command::Project {
-                            islands: self.target_islands(),
-                            mode,
-                        });
+                    if ui.button(label).on_hover_text(tip).clicked() {
+                        self.project(mode);
                     }
+                }
+            });
+            egui::Grid::new("projections").show(ui, |ui| {
+                type Make = fn(Axis) -> Projection;
+                let rows: [(&str, Make, &str); 3] = [
+                    ("Planar", Projection::Planar, "Along a world axis"),
+                    (
+                        "Cylinder",
+                        Projection::Cylindrical,
+                        "Unroll each island around an axis",
+                    ),
+                    (
+                        "Sphere",
+                        Projection::Spherical,
+                        "Longitude/latitude around an axis",
+                    ),
+                ];
+                for (name, make, tip) in rows {
+                    ui.label(name).on_hover_text(tip);
+                    ui.horizontal(|ui| {
+                        for (label, axis) in [("X", Axis::X), ("Y", Axis::Y), ("Z", Axis::Z)] {
+                            if ui.button(label).on_hover_text(tip).clicked() {
+                                self.project(make(axis));
+                            }
+                        }
+                    });
+                    ui.end_row();
                 }
             });
             if ui
@@ -577,6 +663,18 @@ impl App {
                         .range(0.0..=64.0)
                         .suffix(" px"),
                 );
+                ui.end_row();
+                ui.label("Method");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.pack_method, PackMethod::Raster, "Raster")
+                        .on_hover_text("Bitmask packing: fills holes and concavities");
+                    ui.selectable_value(&mut self.pack_method, PackMethod::Shelf, "Shelf")
+                        .on_hover_text("Bounding boxes on shelves: fastest");
+                });
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut self.pack_rotate, "Rotate 90°")
+                    .on_hover_text("Raster: try 4 rotations. Shelf: lay islands flat.");
                 ui.end_row();
             });
             if ui.button("Pack (P)").clicked() {
@@ -776,6 +874,23 @@ impl App {
         {
             self.click(view, local(p), size, modifiers);
         }
+        // Box selection: left-drag without Alt.
+        if response.drag_started_by(PointerButton::Primary)
+            && !modifiers.alt
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            self.box_start = Some((view, local(p)));
+        }
+        let box_rect = match (self.box_start, response.interact_pointer_pos()) {
+            (Some((v, a)), Some(b)) if v == view => Some((a, local(b))),
+            _ => None,
+        };
+        if response.drag_stopped() {
+            if let Some((a, b)) = box_rect {
+                self.box_select(view, a.min(b), a.max(b), size, modifiers);
+            }
+            self.box_start = None;
+        }
 
         // Render.
         let ppp = ui.ctx().pixels_per_point();
@@ -822,6 +937,18 @@ impl App {
                 Color32::WHITE,
             );
         }
+        if let Some((a, b)) = box_rect
+            && response.dragged_by(PointerButton::Primary)
+        {
+            let r = Rect::from_two_pos(
+                rect.min + EVec2::new(a.x, a.y),
+                rect.min + EVec2::new(b.x, b.y),
+            );
+            let color = Color32::from_rgb(255, 170, 60);
+            ui.painter().rect_filled(r, 0.0, color.gamma_multiply(0.08));
+            ui.painter()
+                .rect_stroke(r, 0.0, (1.0, color), egui::StrokeKind::Inside);
+        }
         let label = if view == 0 { "3D" } else { "UV" };
         ui.painter().text(
             rect.min + EVec2::new(8.0, 6.0),
@@ -830,6 +957,83 @@ impl App {
             egui::FontId::proportional(14.0),
             Color32::from_white_alpha(160),
         );
+    }
+
+    /// Screen position (view-local points) of a corner in a view.
+    fn corner_screen(&self, view: usize, c: usize, size: Vec2) -> Option<Vec2> {
+        let doc = self.session.document()?;
+        if view == 0 {
+            let clip = self.cam3.view_proj(size.x / size.y)
+                * doc.mesh.corner_position(c).as_vec3().extend(1.0);
+            if clip.w <= 0.0 {
+                return None; // behind the camera
+            }
+            let ndc = clip.truncate() / clip.w;
+            Some(Vec2::new(
+                (ndc.x + 1.0) / 2.0 * size.x,
+                (1.0 - ndc.y) / 2.0 * size.y,
+            ))
+        } else {
+            Some(
+                self.camuv
+                    .uv_to_screen(doc.uv().uv_at_corner(c).as_vec2(), size),
+            )
+        }
+    }
+
+    /// Islands mode: islands with a face whose center is inside the box.
+    /// Edges mode: edges with both ends inside. Shift adds, Ctrl removes,
+    /// otherwise the selection is replaced. The 3D view selects through
+    /// (hidden faces included).
+    fn box_select(&mut self, view: usize, lo: Vec2, hi: Vec2, size: Vec2, m: Modifiers) {
+        let Some(doc) = self.session.document() else {
+            return;
+        };
+        let mesh = &doc.mesh;
+        let inside = |p: Option<Vec2>| p.is_some_and(|p| p.cmpge(lo).all() && p.cmple(hi).all());
+        let on = !m.command;
+        match self.mode {
+            SelectMode::Islands => {
+                let Some(scene) = &self.scene else { return };
+                let mut hit = vec![false; scene.islands.count()];
+                for f in 0..mesh.face_count() {
+                    let corners = mesh.face_corners(f);
+                    let k = corners.len() as f32;
+                    let pts: Option<Vec<Vec2>> =
+                        corners.map(|c| self.corner_screen(view, c, size)).collect();
+                    let center = pts.map(|p| p.iter().sum::<Vec2>() / k);
+                    if inside(center) {
+                        hit[scene.islands.island_of_face(f)] = true;
+                    }
+                }
+                if !m.shift && !m.command {
+                    self.sel_faces.iter_mut().for_each(|s| *s = false);
+                }
+                for (i, _) in hit.iter().enumerate().filter(|(_, h)| **h) {
+                    for &f in scene.islands.faces(i) {
+                        self.sel_faces[f as usize] = on;
+                    }
+                }
+            }
+            SelectMode::Edges => {
+                let mut hit = vec![false; mesh.edge_count()];
+                for c in 0..mesh.corner_count() {
+                    if inside(self.corner_screen(view, c, size))
+                        && inside(self.corner_screen(view, mesh.next(c), size))
+                    {
+                        hit[mesh.corner_edge(c)] = true;
+                    }
+                }
+                if !m.shift && !m.command {
+                    self.sel_edges.iter_mut().for_each(|s| *s = false);
+                }
+                for (e, _) in hit.iter().enumerate().filter(|(_, h)| **h) {
+                    self.sel_edges[e] = on;
+                }
+                self.last_vertex = None;
+            }
+        }
+        self.gpu_dirty = true;
     }
 
     fn click(&mut self, view: usize, p: Vec2, size: Vec2, m: Modifiers) {
@@ -931,6 +1135,23 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
+        let dropped = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .find(|p| !p.as_os_str().is_empty())
+        });
+        if let Some(path) = dropped {
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("jsonl") || e.eq_ignore_ascii_case("json"))
+            {
+                self.run_script(&path);
+            } else {
+                self.open(&path);
+            }
+        }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
