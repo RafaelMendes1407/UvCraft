@@ -1,56 +1,96 @@
-# UvCraft
+<p align="center">
+  <img src="icon.png" alt="UvCraft icon" width="104">
+</p>
 
-UvCraft is a Rust desktop UV editor with a local Blender bridge. It can mark seams, unwrap UV islands, edit and pack them, visualize distortion, and send UV coordinates and seams back to Blender without changing the 3D mesh geometry.
+<h1 align="center">UvCraft</h1>
 
-## Start here
+<p align="center"><strong>Cut seams. Shape islands. Bring your UVs back to Blender.</strong></p>
 
-The [user guide](docs/user-guide.md) covers installation, the UV workflow, and the complete Blender round trip. Once the add-on is installed:
+<p align="center">
+  An open source desktop UV editor for artists who want direct control over unwrapping, layout, and distortion.
+</p>
 
-1. Open UvCraft and Blender.
-2. In UvCraft, click **File → Copy bridge token**.
-3. In Blender, select a mesh and open **3D View → Sidebar (`N`) → UvCraft**. Paste the token into **Session token** and click **Connect**.
-4. Click **Send Selected**. The mesh appears automatically in UvCraft.
-5. Edit the UVs and seams in UvCraft.
-6. In Blender, keep the object selected and click **Receive UVs**. The UVs and seams are applied to the original mesh.
+<p align="center">
+  <a href="https://github.com/RafaelMendes1407/UvCraft/releases/latest"><strong>Download for Linux or Windows</strong></a>
+  · <a href="docs/user-guide.md">User guide</a>
+  · <a href="bridges/blender/README.md">Blender add-on</a>
+</p>
 
-Transfers are manual: **Connect** alone does not send a mesh.
+<p align="center">
+  <a href="https://github.com/RafaelMendes1407/UvCraft/actions/workflows/release.yml"><img src="https://github.com/RafaelMendes1407/UvCraft/actions/workflows/release.yml/badge.svg" alt="Build and release status"></a>
+</p>
 
-## Run from source
+![UvCraft desktop editor showing a 3D mesh and its packed UV islands](docs/images/screenshots/boombox-packed.png)
 
-Rust 1.95 or newer is required. From the repository root:
+<p align="center"><sub>UvCraft desktop editor with a packed UV layout. This is a screenshot of the application using the BoomBox sample mesh.</sub></p>
+
+## A complete UV workflow in one place
+
+| Create and edit | Organize and pack | Inspect and refine |
+| --- | --- | --- |
+| Mark seams by hand or generate them from edge angles. Unwrap with **ABF** or **LSCM**, then relax with **SLIM** or **ARAP**. | Move, rotate, scale, group, and stack islands. Pack while keeping groups together and preserving intentional stacks. | Switch between checker, texture, island, distortion, flipped UV, overlap, and texel density displays. Inspect the same distortion analysis in 2D and optionally in 3D. |
+
+UvCraft edits UV coordinates and seams while keeping the original 3D mesh geometry intact. Undo and redo are available throughout the editing session.
+
+### From imported UVs to a packed layout
+
+The same mesh before packing, shown in the live 3D and UV viewports:
+
+![UvCraft desktop editor with the imported BoomBox UV layout](docs/images/screenshots/boombox-imported.png)
+
+<p align="center"><sub>Real application screenshot. BoomBox sample model from the <a href="crates/uvcraft-io/tests/fixtures/draco/README.md">Khronos glTF sample collection</a>.</sub></p>
+
+## Blender → UvCraft → Blender
+
+The bundled add-on connects Blender to the running desktop app over a local bridge. Transfers are deliberate: you choose when to send a mesh and when to receive its edited UVs.
+
+1. In UvCraft, choose **File → Install Blender add-on…**, select your Blender profile, then restart Blender and enable **UvCraft UV Bridge**.
+2. In UvCraft, choose **File → Copy bridge token**. In Blender's **3D View → Sidebar (`N`) → UvCraft**, paste it into **Session token** and click **Connect**.
+3. Select a mesh in Blender and click **Send Selected**. It opens automatically in UvCraft.
+4. Cut seams, unwrap, edit, and pack in UvCraft.
+5. Select the same object in Blender and click **Receive UVs** to apply the UV coordinates and seams. Save your `.blend` file.
+
+The bridge checks mesh topology before applying UVs. It does not change Blender's 3D vertices or faces. See the [step-by-step user guide](docs/user-guide.md) for every tool and troubleshooting advice.
+
+## Get UvCraft
+
+Download the latest x86-64 packages from [GitHub Releases](https://github.com/RafaelMendes1407/UvCraft/releases/latest):
+
+| Platform | Start the app |
+| --- | --- |
+| **Linux** | Extract the `.tar.gz` file and run `./uvcraft-app`. To add a per-user desktop launcher, run `sh packaging/linux/install.sh ./uvcraft-app` inside the extracted directory. |
+| **Windows** | Extract the `.zip` file and run `uvcraft-app.exe`. |
+
+The packages include the Blender add-on source. The app can install it through **File → Install Blender add-on…**.
+
+### Build from source
+
+Rust **1.95 or newer** is required. From the repository root:
 
 ```sh
 cargo run -p uvcraft-app
 ```
 
-To open a mesh directly:
+Open an OBJ, glTF, or GLB file from **File → Open…**, drag it onto the window, or pass it at startup:
 
 ```sh
 cargo run -p uvcraft-app -- path/to/mesh.obj
 ```
 
-The editor opens OBJ, glTF, and GLB files. The command line tool supports analysis and automation:
+For analysis and command scripts:
 
 ```sh
 cargo run -p uvcraft-cli -- analyze path/to/mesh.obj --resolution 2048
 cargo run -p uvcraft-cli -- run commands.jsonl
 ```
 
-See also [Blender add-on setup](bridges/blender/README.md), [UV groups](docs/group-workspace.md), and [Linux installation](packaging/linux/README.md).
+## Explore the project
 
-## Download a release
+- [User guide](docs/user-guide.md) — the full desktop and Blender workflow.
+- [Blender add-on guide](bridges/blender/README.md) — installation, connection, and mesh transfer.
+- [UV Island Groups](docs/group-workspace.md) — group selection, transforms, and packing.
+- [Feature tracker](FEATURES.md) — implemented features and planned work.
 
-The [GitHub Releases page](https://github.com/RafaelMendes1407/UvCraft/releases) provides Linux (`.tar.gz`) and Windows (`.zip`) x86-64 packages. Extract the package and run `uvcraft-app` on Linux or `uvcraft-app.exe` on Windows. On Linux, the extracted `packaging/linux/install.sh` can install a per-user desktop launcher with `sh packaging/linux/install.sh ./uvcraft-app`. Every package includes the Blender add-on source; the application can install it through **File → Install Blender add-on…**.
+The desktop app is in `crates/uvcraft-app`; UV algorithms, commands, and mesh I/O live in `crates/uvcraft-algo`, `crates/uvcraft-commands`, and `crates/uvcraft-io`. The Blender add-on is in `bridges/blender`.
 
-## Repository layout
-
-- `crates/uvcraft-app`: desktop interface.
-- `crates/uvcraft-core`, `uvcraft-algo`, and `uvcraft-commands`: data model, algorithms, and operations.
-- `crates/uvcraft-io`: mesh import and export.
-- `crates/uvcraft-bridge`: local Blender communication.
-- `bridges/blender`: Blender add-on.
-- `docs`: user guides; `FEATURES.md` and `features.md`: feature tracking and requirements.
-
-Reference images are kept in `docs/images/`. The application icon remains at the repository root because the binary and Linux packaging embed or install it from there.
-
-License: MIT or Apache-2.0.
+**License:** MIT or Apache-2.0.
