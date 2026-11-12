@@ -1,6 +1,6 @@
 [package]
 name = "uvcraft-io"
-description = "UvCraft file formats (OBJ, glTF)"
+description = "UvCraft file formats (OBJ, glTF, FBX)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 [dependencies]
 base64.workspace = true
+awsm-renderer-codec-meshopt = "=0.38.0"
+draco-oxide-core = "=0.1.0-alpha.12"
+draco-oxide-decoder = "=0.1.0-alpha.12"
+flate2 = "1.1"
 glam.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

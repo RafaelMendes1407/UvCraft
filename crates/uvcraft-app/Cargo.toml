@@ -16,10 +16,16 @@ bytemuck = { version = "1", features = ["derive"] }
 rfd = "0.18"
 image = { version = "0.25", default-features = false, features = ["png"] }
 glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 uvcraft-core.workspace = true
 uvcraft-algo.workspace = true
 uvcraft-io.workspace = true
 uvcraft-commands.workspace = true
+uvcraft-bridge.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+pollster = "0.4"

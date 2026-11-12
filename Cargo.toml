@@ -3,10 +3,10 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 glam = "0.34"
@@ -21,6 +21,7 @@ uvcraft-core = { path = "crates/uvcraft-core" }
 uvcraft-algo = { path = "crates/uvcraft-algo" }
 uvcraft-io = { path = "crates/uvcraft-io" }
 uvcraft-commands = { path = "crates/uvcraft-commands" }
+uvcraft-bridge = { path = "crates/uvcraft-bridge" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -4,7 +4,7 @@
 //! means splitting UV vertices and welding means merging them.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 
 use glam::DVec2;
 use uvcraft_core::{EdgeKind, Islands, Mesh, UvLayer};
@@ -214,6 +214,250 @@ pub fn weld_edges(mesh: &Mesh, uv: &mut UvLayer, edges: &[usize]) -> usize {
     welded
 }
 
+/// Clears seam edges whose two UV sides already coincide. Unlike `weld_edges`,
+/// this never rotates or translates an island. A misaligned seam is rejected
+/// atomically because joining it would deform the existing UV layout.
+pub fn clear_aligned_seams(
+    mesh: &Mesh,
+    uv: &mut UvLayer,
+    edges: &[usize],
+    tolerance: f64,
+) -> Result<usize, String> {
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err("seam tolerance must be finite and non-negative".into());
+    }
+    let mut seams: Vec<_> = edges
+        .iter()
+        .copied()
+        .filter(|&edge| uv.edge_kind(mesh, edge) == EdgeKind::Seam)
+        .collect();
+    seams.sort_unstable();
+    seams.dedup();
+    if seams.is_empty() {
+        return Ok(0);
+    }
+
+    let mut parent: Vec<u32> = (0..uv.uvs.len() as u32).collect();
+    let mut involved = BTreeSet::new();
+    for &edge in &seams {
+        let pairs = edge_corner_pairs(mesh, edge).expect("seams have two faces");
+        for (a, b) in pairs {
+            let a = uv.corner_uv[a];
+            let b = uv.corner_uv[b];
+            involved.insert(a);
+            involved.insert(b);
+            union(&mut parent, a, b);
+        }
+    }
+    for &index in &involved {
+        let representative = find(&mut parent, index);
+        if (uv.uvs[index as usize] - uv.uvs[representative as usize]).length() > tolerance {
+            return Err(
+                "selected seam sides do not coincide; use Weld to align the islands".into(),
+            );
+        }
+    }
+    for index in &mut uv.corner_uv {
+        *index = find(&mut parent, *index);
+    }
+    uv.compact();
+    Ok(seams.len())
+}
+
+/// Welds seams whose two UV copies of each endpoint are within `tolerance_uv`.
+/// Both sides must belong to selected islands; an empty selection means all.
+pub fn auto_weld_edges(
+    mesh: &Mesh,
+    uv: &mut UvLayer,
+    targets: &[usize],
+    tolerance_uv: f64,
+) -> usize {
+    let islands = Islands::compute(mesh, uv);
+    let selected = |i: usize| targets.is_empty() || targets.contains(&i);
+    let edges: Vec<usize> = (0..mesh.edge_count())
+        .filter(|&e| uv.edge_kind(mesh, e) == EdgeKind::Seam)
+        .filter(|&e| {
+            let (c0, c1) = mesh.edge_corners(e);
+            let c1 = c1.expect("seams have two faces");
+            selected(islands.island_of_face(mesh.corner_face(c0)))
+                && selected(islands.island_of_face(mesh.corner_face(c1)))
+        })
+        .filter(|&e| {
+            edge_corner_pairs(mesh, e).is_some_and(|pairs| {
+                pairs
+                    .iter()
+                    .all(|&(a, b)| uv.uv_at_corner(a).distance(uv.uv_at_corner(b)) <= tolerance_uv)
+            })
+        })
+        .collect();
+    weld_edges(mesh, uv, &edges)
+}
+
+/// Interior mesh edges marked hard by OBJ smoothing groups. `None` means
+/// `s off`: every edge touching that face is hard.
+pub fn hard_edges_from_smoothing(mesh: &Mesh, face_groups: &[Option<u32>]) -> Vec<usize> {
+    (0..mesh.edge_count())
+        .filter(|&e| {
+            let (a, Some(b)) = mesh.edge_corners(e) else {
+                return false;
+            };
+            let ga = face_groups.get(mesh.corner_face(a)).copied().flatten();
+            let gb = face_groups.get(mesh.corner_face(b)).copied().flatten();
+            !matches!((ga, gb), (Some(x), Some(y)) if x == y)
+        })
+        .collect()
+}
+
+/// Assigns one smoothing group per smooth-connected face component so every
+/// current UV seam becomes a hard edge. Returns conflicting seam edges when
+/// a seam's faces are also connected through another path of smooth edges:
+/// OBJ's one smoothing-group label per face cannot express that pattern.
+pub fn smoothing_groups_from_seams(
+    mesh: &Mesh,
+    uv: &UvLayer,
+) -> Result<Vec<Option<u32>>, Vec<usize>> {
+    let mut parent: Vec<u32> = (0..mesh.face_count() as u32).collect();
+    for e in 0..mesh.edge_count() {
+        if uv.edge_kind(mesh, e) != EdgeKind::Interior {
+            continue;
+        }
+        let (a, Some(b)) = mesh.edge_corners(e) else {
+            continue;
+        };
+        union(
+            &mut parent,
+            mesh.corner_face(a) as u32,
+            mesh.corner_face(b) as u32,
+        );
+    }
+    let conflicts: Vec<usize> = (0..mesh.edge_count())
+        .filter(|&e| {
+            if uv.edge_kind(mesh, e) != EdgeKind::Seam {
+                return false;
+            }
+            let (a, Some(b)) = mesh.edge_corners(e) else {
+                return false;
+            };
+            find(&mut parent, mesh.corner_face(a) as u32)
+                == find(&mut parent, mesh.corner_face(b) as u32)
+        })
+        .collect();
+    if !conflicts.is_empty() {
+        return Err(conflicts);
+    }
+    let mut labels = BTreeMap::new();
+    Ok((0..mesh.face_count())
+        .map(|f| {
+            let root = find(&mut parent, f as u32);
+            let next = labels.len() as u32 + 1;
+            Some(*labels.entry(root).or_insert(next))
+        })
+        .collect())
+}
+
+/// Assigns smoothing groups that make every UV seam a hard edge. A closed
+/// smooth-face cycle with one seam cannot be represented by one group per
+/// face, so the highest-dihedral smooth edge on a connecting path is made
+/// hard as an additional support edge. Returns those support edges too.
+pub fn smoothing_groups_covering_seams(
+    mesh: &Mesh,
+    uv: &UvLayer,
+) -> (Vec<Option<u32>>, Vec<usize>) {
+    let mut hard: Vec<bool> = (0..mesh.edge_count())
+        .map(|edge| uv.edge_kind(mesh, edge) != EdgeKind::Interior)
+        .collect();
+    let mut support = Vec::new();
+    loop {
+        let mut parent: Vec<u32> = (0..mesh.face_count() as u32).collect();
+        for (edge, &is_hard) in hard.iter().enumerate() {
+            if is_hard {
+                continue;
+            }
+            let (a, Some(b)) = mesh.edge_corners(edge) else {
+                continue;
+            };
+            union(
+                &mut parent,
+                mesh.corner_face(a) as u32,
+                mesh.corner_face(b) as u32,
+            );
+        }
+        let conflict = (0..mesh.edge_count()).find_map(|edge| {
+            if uv.edge_kind(mesh, edge) != EdgeKind::Seam {
+                return None;
+            }
+            let (a, Some(b)) = mesh.edge_corners(edge) else {
+                return None;
+            };
+            let (fa, fb) = (mesh.corner_face(a), mesh.corner_face(b));
+            (find(&mut parent, fa as u32) == find(&mut parent, fb as u32)).then_some((fa, fb))
+        });
+        let Some((from, to)) = conflict else {
+            let mut labels = BTreeMap::new();
+            let groups = (0..mesh.face_count())
+                .map(|face| {
+                    let root = find(&mut parent, face as u32);
+                    let next = labels.len() as u32 + 1;
+                    Some(*labels.entry(root).or_insert(next))
+                })
+                .collect();
+            return (groups, support);
+        };
+        let mut previous = vec![usize::MAX; mesh.face_count()];
+        let mut queue = VecDeque::from([from]);
+        previous[from] = mesh.edge_count();
+        while let Some(face) = queue.pop_front() {
+            if face == to {
+                break;
+            }
+            for corner in mesh.face_corners(face) {
+                let edge = mesh.corner_edge(corner);
+                if hard[edge] {
+                    continue;
+                }
+                let (a, Some(b)) = mesh.edge_corners(edge) else {
+                    continue;
+                };
+                let other = if mesh.corner_face(a) == face {
+                    mesh.corner_face(b)
+                } else {
+                    mesh.corner_face(a)
+                };
+                if previous[other] == usize::MAX {
+                    previous[other] = edge;
+                    queue.push_back(other);
+                }
+            }
+        }
+        let mut path = Vec::new();
+        let mut face = to;
+        while face != from {
+            let edge = previous[face];
+            debug_assert!(edge != usize::MAX);
+            path.push(edge);
+            let (a, Some(b)) = mesh.edge_corners(edge) else {
+                unreachable!()
+            };
+            face = if mesh.corner_face(a) == face {
+                mesh.corner_face(b)
+            } else {
+                mesh.corner_face(a)
+            };
+        }
+        let chosen = *path
+            .iter()
+            .max_by(|&&a, &&b| {
+                mesh.dihedral_angle_deg(a)
+                    .unwrap_or(0.0)
+                    .total_cmp(&mesh.dihedral_angle_deg(b).unwrap_or(0.0))
+                    .then(a.cmp(&b))
+            })
+            .expect("connected conflicting faces have a smooth path");
+        hard[chosen] = true;
+        support.push(chosen);
+    }
+}
+
 /// Interior edges whose dihedral angle exceeds `angle_deg`.
 pub fn sharp_edges(mesh: &Mesh, angle_deg: f64) -> Vec<usize> {
     (0..mesh.edge_count())
@@ -326,11 +570,10 @@ fn boundary_loops(mesh: &Mesh, uv: &UvLayer, faces: &[u32]) -> Vec<Vec<usize>> {
     loops
 }
 
-/// Cuts islands until each has exactly one boundary loop, so it can be
-/// flattened: closed islands get a slit between two far-apart vertices, and
-/// islands with several loops (tubes) get cuts joining the loops along
-/// shortest paths. Handles (genus > 0) are not cut yet.
-/// Returns all edges cut.
+/// Cuts islands into topological disks, so they can be flattened: closed
+/// islands get a slit between two far-apart vertices, islands with several
+/// loops (tubes) get cuts joining the loops along shortest paths, and handles
+/// (genus > 0) are opened with [`handle_cuts`]. Returns all edges cut.
 pub fn cut_to_disk(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize]) -> Vec<usize> {
     let mut all_cuts = Vec::new();
     // Islands are renumbered after each cut; track targets by a face.
@@ -351,7 +594,7 @@ pub fn cut_to_disk(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize]) -> Vec<usiz
             };
             let loops = boundary_loops(mesh, uv, &faces);
             let path = match loops.len() {
-                1 => break,
+                1 => Some(handle_cuts(mesh, uv, &faces)),
                 0 => {
                     let start = mesh.corner_vertex(mesh.face_corners(faces[0] as usize).start);
                     let far = farthest(mesh, start, interior);
@@ -373,6 +616,93 @@ pub fn cut_to_disk(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize]) -> Vec<usiz
         }
     }
     all_cuts
+}
+
+/// Edges to cut so that an island with boundary becomes a disk (empty if it
+/// already is one). Cutting every interior edge outside a spanning tree of
+/// the faces always leaves a disk; that tree is a maximum spanning tree by
+/// edge length, so the cuts favor short edges. Cut edges hanging from a
+/// vertex with no other cut edge and not on the boundary are then glued back
+/// one by one; what remains are the loops through the handles, linked to the
+/// boundary.
+pub fn handle_cuts(mesh: &Mesh, uv: &UvLayer, faces: &[u32]) -> Vec<usize> {
+    let mut in_island = vec![false; mesh.face_count()];
+    for &f in faces {
+        in_island[f as usize] = true;
+    }
+    let mut interior = Vec::new();
+    let mut on_boundary = vec![false; mesh.vertex_count()];
+    for &f in faces {
+        for c in mesh.face_corners(f as usize) {
+            let e = mesh.corner_edge(c);
+            let kind = uv.edge_kind(mesh, e);
+            if kind.is_island_boundary() {
+                for v in mesh.edge_vertices(e) {
+                    on_boundary[v] = true;
+                }
+            } else if kind == EdgeKind::Interior && mesh.edge_corners(e).0 == c {
+                interior.push(e);
+            }
+        }
+    }
+    // Kruskal, longest edges first (ties by index: deterministic).
+    interior.sort_by(|&a, &b| {
+        mesh.edge_length(b)
+            .total_cmp(&mesh.edge_length(a))
+            .then(a.cmp(&b))
+    });
+    let mut parent: Vec<u32> = (0..mesh.face_count() as u32).collect();
+    let mut cut: Vec<usize> = Vec::new();
+    for e in interior {
+        let (c0, c1) = mesh.edge_corners(e);
+        let Some(c1) = c1 else { continue };
+        let (f0, f1) = (mesh.corner_face(c0) as u32, mesh.corner_face(c1) as u32);
+        if !in_island[f0 as usize] || !in_island[f1 as usize] {
+            continue;
+        }
+        if find(&mut parent, f0) == find(&mut parent, f1) {
+            cut.push(e);
+        } else {
+            union(&mut parent, f0, f1);
+        }
+    }
+
+    // Prune dangling cut edges.
+    let mut degree = vec![0u32; mesh.vertex_count()];
+    let mut incident: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &e in &cut {
+        for v in mesh.edge_vertices(e) {
+            degree[v] += 1;
+            incident.entry(v).or_default().push(e);
+        }
+    }
+    let mut alive = vec![false; mesh.edge_count()];
+    for &e in &cut {
+        alive[e] = true;
+    }
+    let mut stack: Vec<usize> = incident
+        .keys()
+        .copied()
+        .filter(|&v| degree[v] == 1 && !on_boundary[v])
+        .collect();
+    stack.sort_unstable();
+    while let Some(v) = stack.pop() {
+        if degree[v] != 1 || on_boundary[v] {
+            continue;
+        }
+        let Some(&e) = incident[&v].iter().find(|&&e| alive[e]) else {
+            continue;
+        };
+        alive[e] = false;
+        for w in mesh.edge_vertices(e) {
+            degree[w] -= 1;
+            if w != v && degree[w] == 1 && !on_boundary[w] {
+                stack.push(w);
+            }
+        }
+    }
+    cut.retain(|&e| alive[e]);
+    cut
 }
 
 fn farthest(mesh: &Mesh, from: usize, allowed: impl Fn(usize) -> bool) -> usize {
@@ -407,6 +737,41 @@ fn farthest(mesh: &Mesh, from: usize, allowed: impl Fn(usize) -> bool) -> usize 
 pub(crate) mod tests {
     use super::*;
     use glam::DVec3;
+
+    #[test]
+    fn smoothing_groups_reject_a_seam_inside_a_smooth_face_cycle() {
+        let positions = vec![
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::Y,
+            DVec3::new(0.5, 0.5, 0.0),
+        ];
+        let mesh = Mesh::new(positions, &[[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]).unwrap();
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..mesh.corner_count())
+                .map(|c| mesh.corner_vertex(c) as u32)
+                .collect(),
+            uvs: vec![
+                DVec2::ZERO,
+                DVec2::X,
+                DVec2::ONE,
+                DVec2::Y,
+                DVec2::splat(0.5),
+                DVec2::X,
+            ],
+        };
+        uv.corner_uv[1] = 5; // seam on one spoke; other spokes form a smooth path.
+        let conflicts = smoothing_groups_from_seams(&mesh, &uv).unwrap_err();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(uv.edge_kind(&mesh, conflicts[0]), EdgeKind::Seam);
+        let (groups, support) = smoothing_groups_covering_seams(&mesh, &uv);
+        assert_eq!(support.len(), 1);
+        let hard = hard_edges_from_smoothing(&mesh, &groups);
+        assert!(hard.contains(&conflicts[0]));
+        assert!(hard.contains(&support[0]));
+    }
 
     /// n×n grid of quads in the XY plane with UVs = positions / n, fully welded.
     pub fn grid(n: usize) -> (Mesh, UvLayer) {
@@ -482,6 +847,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn clearing_aligned_seams_preserves_uv_positions_and_rejects_gaps() {
+        let (mesh, mut uv) = grid(3);
+        let cut = column(&mesh, 3, 1);
+        cut_edges(&mesh, &mut uv, &cut);
+        let positions: Vec<_> = (0..mesh.corner_count())
+            .map(|corner| uv.uv_at_corner(corner))
+            .collect();
+        assert_eq!(
+            clear_aligned_seams(&mesh, &mut uv, &cut, 1e-6),
+            Ok(cut.len())
+        );
+        assert_eq!(Islands::compute(&mesh, &uv).count(), 1);
+        for (corner, expected) in positions.into_iter().enumerate() {
+            assert_eq!(uv.uv_at_corner(corner), expected);
+        }
+
+        cut_edges(&mesh, &mut uv, &cut);
+        let islands = Islands::compute(&mesh, &uv);
+        for index in islands.uv_indices(1, &mesh, &uv) {
+            uv.uvs[index as usize].x += 2.0;
+        }
+        let previous = uv.clone();
+        assert!(clear_aligned_seams(&mesh, &mut uv, &cut, 1e-6).is_err());
+        assert_eq!(uv.uvs, previous.uvs);
+        assert_eq!(uv.corner_uv, previous.corner_uv);
+    }
+
+    #[test]
     fn interior_slit_splits_only_inner_vertices() {
         let (m, mut uv) = grid(4);
         // Two edges in the middle of column 2 (rows 1 and 2): a slit.
@@ -552,6 +945,76 @@ pub(crate) mod tests {
         assert_eq!(cut_to_disk(&tube, &mut uv, &[0]).len(), 1);
         let isl = Islands::compute(&tube, &uv);
         assert_eq!(boundary_loops(&tube, &uv, isl.faces(0)).len(), 1);
+    }
+
+    /// χ = V − E + F of an island as cut: UV vertices, and seam edges with
+    /// both sides in the island counted twice.
+    fn euler(m: &Mesh, uv: &UvLayer, faces: &[u32]) -> i64 {
+        let mut verts: Vec<u32> = faces
+            .iter()
+            .flat_map(|&f| m.face_corners(f as usize).map(|c| uv.corner_uv[c]))
+            .collect();
+        verts.sort_unstable();
+        verts.dedup();
+        let half_edges: usize = faces
+            .iter()
+            .map(|&f| m.face_corners(f as usize).len())
+            .sum();
+        let interior = faces
+            .iter()
+            .flat_map(|&f| m.face_corners(f as usize))
+            .filter(|&c| uv.edge_kind(m, m.corner_edge(c)) == EdgeKind::Interior)
+            .count();
+        // Interior edges have 2 half-edges in the island, all others 1.
+        let edges = interior / 2 + (half_edges - interior);
+        verts.len() as i64 - edges as i64 + faces.len() as i64
+    }
+
+    pub fn torus(n: usize, k: usize) -> (Mesh, UvLayer) {
+        let (big, small) = (3.0, 1.0);
+        let mut p = Vec::new();
+        for i in 0..n {
+            for j in 0..k {
+                let (a, b) = (
+                    std::f64::consts::TAU * i as f64 / n as f64,
+                    std::f64::consts::TAU * j as f64 / k as f64,
+                );
+                let r = big + small * b.cos();
+                p.push(DVec3::new(r * a.cos(), small * b.sin(), r * a.sin()));
+            }
+        }
+        let v = |i: usize, j: usize| ((i % n) * k + j % k) as u32;
+        let faces: Vec<[u32; 4]> = (0..n)
+            .flat_map(|i| (0..k).map(move |j| [v(i, j), v(i, j + 1), v(i + 1, j + 1), v(i + 1, j)]))
+            .collect();
+        let m = Mesh::new(p, &faces).unwrap();
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..m.corner_count())
+                .map(|c| m.corner_vertex(c) as u32)
+                .collect(),
+            uvs: vec![DVec2::ZERO; m.vertex_count()],
+        };
+        (m, uv)
+    }
+
+    #[test]
+    fn torus_is_cut_to_a_disk() {
+        let (m, mut uv) = torus(24, 12);
+        assert_eq!(euler(&m, &uv, Islands::compute(&m, &uv).faces(0)), 0);
+        let cuts = cut_to_disk(&m, &mut uv, &[0]);
+        let isl = Islands::compute(&m, &uv);
+        assert_eq!(isl.count(), 1);
+        assert_eq!(boundary_loops(&m, &uv, isl.faces(0)).len(), 1);
+        assert_eq!(euler(&m, &uv, isl.faces(0)), 1, "a disk");
+        // Two generator loops (12 + 24 edges) plus the slit, give or take.
+        assert!(cuts.len() <= 60, "{} cut edges", cuts.len());
+        // A disk already: nothing more to cut.
+        assert!(handle_cuts(&m, &uv, isl.faces(0)).is_empty());
+        let r = crate::unfold::unfold_lscm(&m, &mut uv, &isl, &[0], &[]);
+        assert_eq!(r.unfolded, 1);
+        let a = crate::analysis::analyze(&m, &uv, &isl, 1024);
+        assert_eq!(a.flipped_islands, 0);
     }
 
     #[test]

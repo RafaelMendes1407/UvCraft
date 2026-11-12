@@ -23,6 +23,8 @@ pub enum MeshError {
     },
     #[error("mesh too large: {0} elements exceed the u32 index range")]
     TooLarge(usize),
+    #[error("replacement positions have {actual} vertices, expected {expected}")]
+    PositionCountMismatch { expected: usize, actual: usize },
 }
 
 /// Polygon mesh stored as CSR arrays.
@@ -228,6 +230,20 @@ impl Mesh {
     pub fn positions(&self) -> &[DVec3] {
         &self.positions
     }
+
+    /// A geometry-only copy for measurements in another coordinate space.
+    /// Face and corner order, edges, twins and vertex adjacency stay identical.
+    pub fn with_positions(&self, positions: Vec<DVec3>) -> Result<Self, MeshError> {
+        if positions.len() != self.positions.len() {
+            return Err(MeshError::PositionCountMismatch {
+                expected: self.positions.len(),
+                actual: positions.len(),
+            });
+        }
+        let mut mesh = self.clone();
+        mesh.positions = positions;
+        Ok(mesh)
+    }
     pub fn position(&self, v: usize) -> DVec3 {
         self.positions[v]
     }
@@ -342,6 +358,34 @@ mod tests {
         );
         assert_eq!(m.non_manifold_edge_count(), 0);
         assert_eq!(m.inconsistent_orientation_edge_count(), 0);
+    }
+
+    #[test]
+    fn replacement_positions_keep_topology_and_change_geometry() {
+        let original = quad_pair();
+        let scaled = original
+            .with_positions(original.positions().iter().map(|p| *p * 2.0).collect())
+            .unwrap();
+        assert_eq!(scaled.vertex_count(), original.vertex_count());
+        assert_eq!(scaled.corner_count(), original.corner_count());
+        assert_eq!(scaled.edge_count(), original.edge_count());
+        for c in 0..original.corner_count() {
+            assert_eq!(scaled.corner_vertex(c), original.corner_vertex(c));
+            assert_eq!(scaled.corner_face(c), original.corner_face(c));
+            assert_eq!(scaled.twin(c), original.twin(c));
+        }
+        assert_eq!(
+            scaled.face_area_normal(0),
+            original.face_area_normal(0) * 4.0
+        );
+        assert_eq!(original.position(1), DVec3::new(1.0, 0.0, 0.0));
+        assert!(matches!(
+            original.with_positions(vec![]),
+            Err(MeshError::PositionCountMismatch {
+                expected: 6,
+                actual: 0
+            })
+        ));
     }
 
     #[test]

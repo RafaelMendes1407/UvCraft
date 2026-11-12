@@ -1,0 +1,104 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test workspace
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb1-dev libx11-dev
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+      - name: Run Blender bridge tests
+        run: python3 -m unittest discover -s bridges/blender/tests -v
+
+  package:
+    name: Package ${{ matrix.platform }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: windows-x86_64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb1-dev libx11-dev
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build desktop application
+        run: cargo build --release -p uvcraft-app --locked
+      - name: Package Linux application
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME//\//-}"
+          bash packaging/release/package-linux.sh "$version"
+      - name: Package Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '/', '-'
+          ./packaging/release/package-windows.ps1 -Version $version
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: uvcraft-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download platform archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: uvcraft-*
+          path: dist
+          merge-multiple: true
+      - name: Verify both platforms are present
+        shell: bash
+        run: |
+          test -f "dist/UvCraft-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          test -f "dist/UvCraft-${GITHUB_REF_NAME}-windows-x86_64.zip"
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if test -f "docs/releases/${GITHUB_REF_NAME}.md"; then
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "UvCraft $GITHUB_REF_NAME" --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "UvCraft $GITHUB_REF_NAME" --generate-notes
+          fi

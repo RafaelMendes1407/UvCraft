@@ -6,14 +6,31 @@
 //! - `--screenshot`: save a PNG of the window after a few frames, then quit
 
 mod app;
+mod blender_addon;
 mod camera;
+mod gizmo;
+mod preferences;
 mod render;
 mod scene;
+mod theme;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use eframe::egui;
+
+fn window_icon() -> egui::IconData {
+    let original = image::load_from_memory(include_bytes!("../../../icon.png"))
+        .expect("bundled UvCraft icon must be a PNG");
+    let rgba = original
+        .resize_exact(64, 64, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
+    egui::IconData {
+        rgba: rgba.into_raw(),
+        width: 64,
+        height: 64,
+    }
+}
 
 fn main() -> ExitCode {
     let mut startup = app::Startup {
@@ -42,8 +59,10 @@ fn main() -> ExitCode {
         viewport: egui::ViewportBuilder::default()
             .with_title("UvCraft")
             .with_app_id("uvcraft")
-            .with_inner_size([1440.0, 860.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_icon(window_icon())
+            .with_decorations(false)
+            .with_inner_size([1600.0, 900.0])
+            .with_min_inner_size([1000.0, 620.0]),
         ..Default::default()
     };
     match eframe::run_native(

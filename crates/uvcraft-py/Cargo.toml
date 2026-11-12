@@ -1,0 +1,28 @@
+[package]
+name = "uvcraft-py"
+description = "UvCraft Python bindings (pyo3) over the command layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "uvcraft"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The pyo3 bindings. Off by default so that plain `cargo build`/`cargo test`
+# never need Python (or a libpython to link against). maturin turns it on
+# (see pyproject.toml) and sets PYO3_BUILD_EXTENSION_MODULE itself.
+python = ["dep:pyo3"]
+
+[dependencies]
+pyo3 = { version = "0.30", features = ["abi3-py39"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uvcraft-core.workspace = true
+uvcraft-commands.workspace = true
+
+[lints]
+workspace = true

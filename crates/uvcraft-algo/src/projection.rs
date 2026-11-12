@@ -3,7 +3,7 @@
 //! cylindrical and spherical projections cut each island where it wraps around
 //! the axis.
 
-use glam::{DVec2, DVec3};
+use glam::{DMat4, DVec2, DVec3, DVec4};
 use serde::{Deserialize, Serialize};
 use uvcraft_core::{Islands, Mesh, UvLayer};
 
@@ -17,7 +17,7 @@ pub enum Axis {
     Z,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Projection {
     /// Along a world axis, for all target islands together.
@@ -31,6 +31,86 @@ pub enum Projection {
     /// Each island mapped by longitude/latitude around a world axis through
     /// its bbox center.
     Spherical(Axis),
+    /// Orthographic projection along a captured camera's screen axes.
+    CameraOrthographic(CameraOrthographic),
+    /// Perspective projection through a captured world-to-clip matrix.
+    CameraPerspective(CameraPerspective),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraPerspective {
+    /// Column-major world-to-clip matrix using Z in [0, 1].
+    pub view_proj: [f64; 16],
+}
+
+impl CameraPerspective {
+    pub fn valid(self) -> bool {
+        self.view_proj.iter().all(|value| value.is_finite())
+    }
+}
+
+/// Projects selected islands as seen by a perspective camera. Depth clipping
+/// is checked before changing UVs, so a near-plane crossing is never turned
+/// into non-finite UV coordinates or a partial edit.
+pub fn project_camera_perspective(
+    mesh: &Mesh,
+    uv: &mut UvLayer,
+    targets: &[usize],
+    camera: CameraPerspective,
+) -> Result<(), String> {
+    if !camera.valid() {
+        return Err("camera matrix must be finite".into());
+    }
+    let matrix = DMat4::from_cols_array(&camera.view_proj);
+    let islands = Islands::compute(mesh, uv);
+    let mut projected = Vec::new();
+    for &island in targets {
+        for &face in islands.faces(island) {
+            for corner in mesh.face_corners(face as usize) {
+                let p = mesh.corner_position(corner);
+                let clip = matrix * DVec4::new(p.x, p.y, p.z, 1.0);
+                if !clip.is_finite() || clip.w <= 1e-9 || clip.z < -1e-6 || clip.z > clip.w + 1e-6 {
+                    return Err("selected geometry crosses the camera near/far plane or lies behind the camera".into());
+                }
+                let mapped = DVec2::new(clip.x / clip.w, clip.y / clip.w);
+                if !mapped.is_finite() {
+                    return Err("camera projection produced non-finite coordinates".into());
+                }
+                projected.push((uv.corner_uv[corner], mapped));
+            }
+        }
+    }
+    let mut touched = Vec::with_capacity(projected.len());
+    for (index, value) in projected {
+        uv.uvs[index as usize] = value;
+        touched.push(index);
+    }
+    touched.sort_unstable();
+    touched.dedup();
+    fit_unit_square(uv, &touched);
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraOrthographic {
+    pub right: [f64; 3],
+    pub up: [f64; 3],
+    /// Width divided by height of the camera viewport.
+    pub aspect: f64,
+}
+
+impl CameraOrthographic {
+    pub fn valid(self) -> bool {
+        let right = DVec3::from_array(self.right);
+        let up = DVec3::from_array(self.up);
+        self.aspect.is_finite()
+            && self.aspect > 0.0
+            && right.is_finite()
+            && up.is_finite()
+            && right.length_squared() > 1e-24
+            && up.length_squared() > 1e-24
+            && right.cross(up).length_squared() > 1e-24
+    }
 }
 
 /// Tangent basis (t, b) with t × b = n, so front faces keep their winding.
@@ -81,6 +161,30 @@ pub fn project(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize], mode: Projectio
         fit_unit_square(uv, &touched);
         return;
     }
+    if let Projection::CameraOrthographic(camera) = mode {
+        if !camera.valid() {
+            return;
+        }
+        let right = DVec3::from_array(camera.right).normalize();
+        let up = DVec3::from_array(camera.up).normalize();
+        let mut touched = Vec::new();
+        for f in faces {
+            for c in mesh.face_corners(f) {
+                let p = mesh.corner_position(c);
+                let i = uv.corner_uv[c];
+                uv.uvs[i as usize] = DVec2::new(p.dot(right) / camera.aspect, p.dot(up));
+                touched.push(i);
+            }
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        fit_unit_square(uv, &touched);
+        return;
+    }
+    if let Projection::CameraPerspective(camera) = mode {
+        let _ = project_camera_perspective(mesh, uv, targets, camera);
+        return;
+    }
 
     // Per-face basis.
     let mut face_basis: Vec<(usize, (DVec3, DVec3))> = Vec::with_capacity(faces.len());
@@ -105,6 +209,8 @@ pub fn project(mesh: &Mesh, uv: &mut UvLayer, targets: &[usize], mode: Projectio
             }
         }
         Projection::Cylindrical(_) | Projection::Spherical(_) => unreachable!(),
+        Projection::CameraOrthographic(_) => unreachable!(),
+        Projection::CameraPerspective(_) => unreachable!(),
         Projection::Box => {
             let mut label = vec![usize::MAX; mesh.face_count()];
             for &f in &faces {
@@ -293,6 +399,95 @@ mod tests {
     use super::*;
     use crate::analysis::analyze;
     use uvcraft_core::EdgeKind;
+
+    #[test]
+    fn orthographic_camera_projection_uses_screen_axes_and_aspect() {
+        let mesh = Mesh::new(
+            vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(2.0, 0.0, 3.0),
+                DVec3::new(2.0, 1.0, 3.0),
+                DVec3::new(0.0, 1.0, 0.0),
+            ],
+            &[[0, 1, 2, 3]],
+        )
+        .unwrap();
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: vec![0, 1, 2, 3],
+            uvs: vec![DVec2::ZERO; 4],
+        };
+        let camera = CameraOrthographic {
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            aspect: 2.0,
+        };
+        project(&mesh, &mut uv, &[0], Projection::CameraOrthographic(camera));
+        assert_eq!(uv.uvs, [DVec2::ZERO, DVec2::X, DVec2::ONE, DVec2::Y]);
+        assert!(
+            !CameraOrthographic {
+                aspect: 0.0,
+                ..camera
+            }
+            .valid()
+        );
+        assert!(
+            !CameraOrthographic {
+                up: [2.0, 0.0, 0.0],
+                ..camera
+            }
+            .valid()
+        );
+    }
+
+    #[test]
+    fn perspective_camera_projects_depth_and_rejects_near_plane_without_edit() {
+        let mesh = Mesh::new(
+            vec![
+                DVec3::new(0.0, 0.0, 2.0),
+                DVec3::new(2.0, 0.0, 2.0),
+                DVec3::new(2.0, 2.0, 4.0),
+                DVec3::new(0.0, 2.0, 4.0),
+            ],
+            &[[0, 1, 2, 3]],
+        )
+        .unwrap();
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: vec![0, 1, 2, 3],
+            uvs: vec![DVec2::ZERO; 4],
+        };
+        let camera = CameraPerspective {
+            view_proj: [
+                1.0, 0.0, 0.0, 0.0, // x
+                0.0, 1.0, 0.0, 0.0, // y
+                0.0, 0.0, 1.0, 1.0, // z, w
+                0.0, 0.0, -1.0, 0.0,
+            ],
+        };
+        project_camera_perspective(&mesh, &mut uv, &[0], camera).unwrap();
+        assert_eq!(
+            uv.uvs,
+            [
+                DVec2::ZERO,
+                DVec2::X,
+                DVec2::splat(0.5),
+                DVec2::new(0.0, 0.5)
+            ]
+        );
+        let before = uv.clone();
+        let behind = Mesh::new(
+            vec![
+                DVec3::new(0.0, 0.0, 0.5),
+                DVec3::new(1.0, 0.0, 2.0),
+                DVec3::new(0.0, 1.0, 2.0),
+            ],
+            &[[0, 1, 2]],
+        )
+        .unwrap();
+        assert!(project_camera_perspective(&behind, &mut uv, &[0], camera).is_err());
+        assert_eq!(uv, before);
+    }
 
     fn cube() -> (Mesh, UvLayer) {
         let p = vec![

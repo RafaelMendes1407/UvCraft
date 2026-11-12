@@ -6,7 +6,7 @@
 //! indices while keeping their `v` and `vn` tokens as written. Positions,
 //! normals, face order, groups, materials and comments are untouched.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write as _;
 use std::ops::Range;
 use std::path::Path;
@@ -24,6 +24,8 @@ pub enum ObjError {
     Mesh(#[from] MeshError),
     #[error(transparent)]
     Uv(#[from] UvError),
+    #[error("smoothing group count does not match face count")]
+    SmoothingCount,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,6 +44,24 @@ pub struct ObjSource {
     lines: Vec<(Range<usize>, LineKind)>,
     original_uv: UvLayer,
     newline: &'static str,
+    /// Data used only when converting to another format.
+    pub(crate) extra: ObjExtra,
+    face_smoothing: Vec<Option<u32>>,
+}
+
+/// Per-face and per-corner OBJ data that the [`Mesh`] does not hold.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ObjExtra {
+    /// `vn` values in file order.
+    pub normals: Vec<DVec3>,
+    /// Normal index per corner, or `u32::MAX` when the corner has none.
+    pub corner_normal: Vec<u32>,
+    /// `usemtl` names in first-use order.
+    pub materials: Vec<String>,
+    /// Material index per face, or `u32::MAX` before any `usemtl`.
+    pub face_material: Vec<u32>,
+    pub objects: Vec<String>,
+    pub face_object: Vec<u32>,
 }
 
 /// A parsed OBJ file. The whole file is one mesh; `o` names are kept per face.
@@ -65,6 +85,20 @@ pub fn write(path: &Path, source: &ObjSource, mesh: &Mesh, uv: &UvLayer) -> Resu
     let bytes = source.export(mesh, uv)?;
     let mut file = std::fs::File::create(path)?;
     file.write_all(&bytes)?;
+    Ok(())
+}
+
+/// Writes an OBJ with an explicit, per-face smoothing assignment. Original
+/// lines (including comments and materials) remain intact; a new `s` line
+/// immediately before each face overrides earlier smoothing declarations.
+pub fn write_with_smoothing(
+    path: &Path,
+    source: &ObjSource,
+    mesh: &Mesh,
+    uv: &UvLayer,
+    groups: &[Option<u32>],
+) -> Result<(), ObjError> {
+    std::fs::write(path, source.export_with_smoothing(mesh, uv, groups)?)?;
     Ok(())
 }
 
@@ -142,7 +176,13 @@ pub fn parse(original: Vec<u8>) -> Result<ObjDocument, ObjError> {
 
     let mut positions: Vec<DVec3> = Vec::new();
     let mut vts: Vec<DVec2> = Vec::new();
-    let mut normal_count = 0usize;
+    let mut normals: Vec<DVec3> = Vec::new();
+    let mut corner_normal: Vec<u32> = Vec::new();
+    let mut materials: Vec<String> = Vec::new();
+    let mut current_material = u32::MAX;
+    let mut face_material: Vec<u32> = Vec::new();
+    let mut face_smoothing_labels: Vec<Option<String>> = Vec::new();
+    let mut current_smoothing: Option<String> = None;
     let mut faces: Vec<Vec<u32>> = Vec::new();
     let mut face_vts: Vec<Vec<Option<u32>>> = Vec::new();
     let mut objects: Vec<String> = Vec::new();
@@ -180,7 +220,12 @@ pub fn parse(original: Vec<u8>) -> Result<ObjDocument, ObjError> {
                 LineKind::Vt
             }
             Some("vn") => {
-                normal_count += 1;
+                let f = floats(tokens.take(3), line_no)?;
+                let mut n = DVec3::ZERO;
+                for (k, x) in f.into_iter().enumerate() {
+                    n[k] = x;
+                }
+                normals.push(n);
                 LineKind::Other
             }
             Some("f") => {
@@ -196,20 +241,45 @@ pub fn parse(original: Vec<u8>) -> Result<ObjDocument, ObjError> {
                         }
                         _ => None,
                     });
-                    if let Some(n) = parts.next().filter(|n| !n.is_empty()) {
-                        resolve(n, normal_count, "normal", line_no)?;
-                    }
+                    corner_normal.push(match parts.next().filter(|n| !n.is_empty()) {
+                        Some(n) => resolve(n, normals.len(), "normal", line_no)?,
+                        None => u32::MAX,
+                    });
                 }
                 let object = *current_object.get_or_insert_with(|| {
                     objects.push("default".into());
                     objects.len() as u32 - 1
                 });
                 face_object.push(object);
+                face_material.push(current_material);
+                face_smoothing_labels.push(current_smoothing.clone());
                 faces.push(fv);
                 face_vts.push(ft);
                 LineKind::Face(faces.len() as u32 - 1)
             }
             Some("l") => LineKind::Polyline,
+            Some("s") => {
+                let label = tokens.next().unwrap_or("off");
+                current_smoothing = if label.eq_ignore_ascii_case("off") || label == "0" {
+                    None
+                } else if label.eq_ignore_ascii_case("on") {
+                    Some("1".into())
+                } else {
+                    Some(label.to_string())
+                };
+                LineKind::Other
+            }
+            Some("usemtl") => {
+                let name = data.trim_start()[6..].trim();
+                current_material = match materials.iter().position(|m| m == name) {
+                    Some(i) => i as u32,
+                    None => {
+                        materials.push(name.to_string());
+                        materials.len() as u32 - 1
+                    }
+                };
+                LineKind::Other
+            }
             Some("o") => {
                 let name = data.trim_start()[1..].trim();
                 objects.push(if name.is_empty() {
@@ -224,6 +294,35 @@ pub fn parse(original: Vec<u8>) -> Result<ObjDocument, ObjError> {
         };
         lines.push((range, kind));
     }
+
+    // OBJ permits named smoothing groups as well as numeric labels. Give
+    // names stable IDs that do not collide with any numeric group in the file.
+    let mut used: BTreeSet<u32> = face_smoothing_labels
+        .iter()
+        .flatten()
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect();
+    let mut names: HashMap<String, u32> = HashMap::new();
+    let mut next = 1u32;
+    let face_smoothing: Vec<Option<u32>> = face_smoothing_labels
+        .into_iter()
+        .map(|label| {
+            label.map(|s| {
+                if let Ok(id) = s.parse::<u32>() {
+                    return id;
+                }
+                *names.entry(s).or_insert_with(|| {
+                    while used.contains(&next) {
+                        next += 1;
+                    }
+                    let id = next;
+                    used.insert(id);
+                    next += 1;
+                    id
+                })
+            })
+        })
+        .collect();
 
     let mesh = Mesh::new(positions, &faces).map_err(|e| match e {
         MeshError::FaceTooSmall { face, count } => ObjError::Parse {
@@ -266,6 +365,15 @@ pub fn parse(original: Vec<u8>) -> Result<ObjDocument, ObjError> {
             lines,
             original_uv: uv.clone(),
             newline,
+            face_smoothing,
+            extra: ObjExtra {
+                normals,
+                corner_normal,
+                materials,
+                face_material,
+                objects: objects.clone(),
+                face_object: face_object.clone(),
+            },
         },
         uv,
         objects,
@@ -282,6 +390,130 @@ fn face_line(lines: &[(Range<usize>, LineKind)], face: usize) -> usize {
 }
 
 impl ObjSource {
+    pub fn material_names(&self) -> &[String] {
+        &self.extra.materials
+    }
+
+    /// Material index of each face, or `u32::MAX` before any `usemtl`.
+    pub fn face_material(&self) -> &[u32] {
+        &self.extra.face_material
+    }
+
+    pub fn face_smoothing(&self) -> &[Option<u32>] {
+        &self.face_smoothing
+    }
+
+    /// Edges whose explicit OBJ corner normals disagree across a shared edge.
+    /// Missing normals on both sides are left to smoothing-group handling.
+    pub fn normal_discontinuity_edges(&self, mesh: &Mesh) -> Vec<usize> {
+        let mut edges = Vec::new();
+        for edge in 0..mesh.edge_count() {
+            let (a, Some(b)) = mesh.edge_corners(edge) else {
+                continue;
+            };
+            let matching = if mesh.corner_vertex(a) == mesh.corner_vertex(b) {
+                [(a, b), (mesh.next(a), mesh.next(b))]
+            } else {
+                [(a, mesh.next(b)), (mesh.next(a), b)]
+            };
+            if matching.iter().any(|&(left, right)| {
+                let a = self.extra.corner_normal[left];
+                let b = self.extra.corner_normal[right];
+                match (a == u32::MAX, b == u32::MAX) {
+                    (true, true) => false,
+                    (true, false) | (false, true) => true,
+                    (false, false) => {
+                        self.extra.normals[a as usize]
+                            .distance_squared(self.extra.normals[b as usize])
+                            > 1e-12
+                    }
+                }
+            }) {
+                edges.push(edge);
+            }
+        }
+        edges
+    }
+
+    pub fn export_with_smoothing(
+        &self,
+        mesh: &Mesh,
+        uv: &UvLayer,
+        groups: &[Option<u32>],
+    ) -> Result<Vec<u8>, ObjError> {
+        if groups.len() != mesh.face_count() {
+            return Err(ObjError::SmoothingCount);
+        }
+        let base = self.export(mesh, uv)?;
+        // Explicit OBJ normals supersede `s` labels. Recompute every corner's
+        // normal under the new groups, sharing one averaged normal per mesh
+        // vertex and smoothing group. Faces marked `s off` stay independent.
+        let key = |face: usize, corner: usize| {
+            (
+                mesh.corner_vertex(corner),
+                groups[face].unwrap_or(u32::MAX),
+                if groups[face].is_none() { face } else { 0 },
+            )
+        };
+        let mut sums: BTreeMap<(usize, u32, usize), DVec3> = BTreeMap::new();
+        for face in 0..mesh.face_count() {
+            let normal = mesh.face_area_normal(face);
+            for corner in mesh.face_corners(face) {
+                *sums.entry(key(face, corner)).or_default() += normal;
+            }
+        }
+        let mut normal_id = BTreeMap::new();
+        let mut normal_lines = Vec::new();
+        for (key, sum) in sums {
+            let normal = if sum.length_squared() > 0.0 {
+                sum.normalize()
+            } else {
+                DVec3::Z
+            };
+            normal_id.insert(key, normal_id.len() as u32 + 1);
+            normal_lines.extend_from_slice(
+                format!("vn {} {} {}{}", normal.x, normal.y, normal.z, self.newline).as_bytes(),
+            );
+        }
+        let corner_normal: Vec<u32> = (0..mesh.corner_count())
+            .map(|corner| normal_id[&key(mesh.corner_face(corner), corner)])
+            .collect();
+        let mut out = Vec::with_capacity(base.len() + groups.len() * 8);
+        let mut face = 0;
+        let mut normals_written = false;
+        for range in line_ranges(&base) {
+            let raw = &base[range];
+            let (content, _) = split_terminator(raw);
+            let text = String::from_utf8_lossy(content);
+            let (data, _) = split_comment(&text);
+            let directive = data.split_whitespace().next();
+            if directive == Some("vn") {
+                continue;
+            }
+            if directive == Some("f") {
+                if !normals_written {
+                    out.extend_from_slice(&normal_lines);
+                    normals_written = true;
+                }
+                let value = groups[face].map_or_else(|| "off".to_string(), |n| n.to_string());
+                out.extend_from_slice(format!("s {value}{}", self.newline).as_bytes());
+                let corners = mesh.face_corners(face);
+                rewrite_line(raw, &mut out, |index, parts| {
+                    let vertex = parts.first().copied().unwrap_or_default();
+                    let normal = corner_normal[corners.start + index];
+                    match parts.get(1).filter(|uv| !uv.is_empty()) {
+                        Some(uv) => format!("{vertex}/{uv}/{normal}"),
+                        None => format!("{vertex}//{normal}"),
+                    }
+                });
+                face += 1;
+            } else {
+                out.extend_from_slice(raw);
+            }
+        }
+        Ok(out)
+    }
+
     /// The bytes to write for this mesh with the given UV layer.
     pub fn export(&self, mesh: &Mesh, uv: &UvLayer) -> Result<Vec<u8>, ObjError> {
         uv.validate(mesh)?;
@@ -370,6 +602,61 @@ mod tests {
     }
 
     #[test]
+    fn smoothing_override_keeps_original_lines_and_reloads_groups() {
+        let doc = parse(CUBE_FACE.as_bytes().to_vec()).unwrap();
+        assert_eq!(doc.source.face_smoothing(), &[None, None]);
+        let out = doc
+            .source
+            .export_with_smoothing(&doc.mesh, &doc.uv, &[Some(1), Some(2)])
+            .unwrap();
+        let text = String::from_utf8(out.clone()).unwrap();
+        assert!(text.contains("s off\r\nvn "));
+        assert!(text.contains("s 1\r\nf 1/1/"));
+        assert!(text.contains("s 2\r\nf -5/-5/"));
+        assert!(text.contains("# left"));
+        let again = parse(out).unwrap();
+        assert_eq!(again.source.face_smoothing(), &[Some(1), Some(2)]);
+        assert_eq!(again.mesh.positions(), doc.mesh.positions());
+        assert_eq!(again.uv, doc.uv);
+    }
+
+    #[test]
+    fn smoothing_export_rewrites_stale_explicit_normals() {
+        let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\n\
+vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\n\
+vn 0 0 1\ns 1\nf 1/1/1 2/2/1 3/3/1\nf 2/2/1 1/1/1 4/4/1\n";
+        let doc = parse(obj.as_bytes().to_vec()).unwrap();
+        assert!(doc.source.normal_discontinuity_edges(&doc.mesh).is_empty());
+        let bytes = doc
+            .source
+            .export_with_smoothing(&doc.mesh, &doc.uv, &[Some(1), Some(2)])
+            .unwrap();
+        let saved = parse(bytes).unwrap();
+        assert_eq!(saved.mesh.positions(), doc.mesh.positions());
+        assert_eq!(saved.uv, doc.uv);
+        assert_eq!(saved.source.face_smoothing(), &[Some(1), Some(2)]);
+        assert_eq!(
+            saved.source.normal_discontinuity_edges(&saved.mesh).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn smoothing_parser_accepts_on_and_named_groups() {
+        let src =
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\ns on\nf 1 2 3\ns smooth\nf 2 4 3\ns 1\nf 1 2 4\n";
+        let doc = parse(src.as_bytes().to_vec()).unwrap();
+        let groups = doc.source.face_smoothing();
+        assert_eq!(groups[0], Some(1));
+        assert_eq!(groups[2], Some(1));
+        assert_ne!(groups[1], Some(1));
+        assert_eq!(
+            doc.source.export(&doc.mesh, &doc.uv).unwrap(),
+            src.as_bytes()
+        );
+    }
+
+    #[test]
     fn changed_uvs_rewrite_only_uv_data() {
         let mut doc = parse(CUBE_FACE.as_bytes().to_vec()).unwrap();
         doc.uv.uvs[1].x = 0.25;
@@ -396,6 +683,25 @@ mod tests {
         assert_eq!(
             out,
             "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nvn 0 0 1\nvt 0 0\nvt 0 0\nvt 0 0\nvt 1 1\nf 1/1 2/2 3/3\nf 3/3/1 2/2 4/4\n"
+        );
+    }
+
+    #[test]
+    fn explicit_corner_normals_identify_hard_edges() {
+        let src = "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\n\
+vn 0 0 1\nvn 0 -1 0\ns 1\nf 1//1 2//1 3//1 4//1\nf 2//2 1//2 5//2 6//2\n";
+        let doc = parse(src.as_bytes().to_vec()).unwrap();
+        let edges = doc.source.normal_discontinuity_edges(&doc.mesh);
+        assert_eq!(edges.len(), 1);
+        let [a, b] = doc.mesh.edge_vertices(edges[0]);
+        assert_eq!([a.min(b), a.max(b)], [0, 1]);
+        let same_vectors = src.replace("vn 0 -1 0", "vn 0 0 1");
+        let smooth = parse(same_vectors.into_bytes()).unwrap();
+        assert!(
+            smooth
+                .source
+                .normal_discontinuity_edges(&smooth.mesh)
+                .is_empty()
         );
     }
 

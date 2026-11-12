@@ -54,6 +54,81 @@ impl Islands {
         Islands { face_island, faces }
     }
 
+    /// Recompute only components touched by edges whose seam state changed.
+    /// Unaffected face groups are reused, then all groups are renumbered by
+    /// their first face so island indices stay deterministic.
+    pub fn update(&self, mesh: &Mesh, before: &UvLayer, after: &UvLayer) -> Self {
+        if self.face_island.len() != mesh.face_count()
+            || before.corner_uv.len() != mesh.corner_count()
+            || after.corner_uv.len() != mesh.corner_count()
+        {
+            return Self::compute(mesh, after);
+        }
+        let mut dirty_islands = vec![false; self.count()];
+        for edge in 0..mesh.edge_count() {
+            if before.edge_kind(mesh, edge) == after.edge_kind(mesh, edge) {
+                continue;
+            }
+            let (a, b) = mesh.edge_corners(edge);
+            dirty_islands[self.island_of_face(mesh.corner_face(a))] = true;
+            if let Some(b) = b {
+                dirty_islands[self.island_of_face(mesh.corner_face(b))] = true;
+            }
+        }
+        if !dirty_islands.iter().any(|&dirty| dirty) {
+            return self.clone();
+        }
+        let mut dirty_faces = vec![false; mesh.face_count()];
+        let mut components: Vec<Vec<u32>> = Vec::new();
+        for (island, faces) in self.faces.iter().enumerate() {
+            if dirty_islands[island] {
+                for &face in faces {
+                    dirty_faces[face as usize] = true;
+                }
+            } else {
+                components.push(faces.clone());
+            }
+        }
+        let mut visited = vec![false; mesh.face_count()];
+        for start in 0..mesh.face_count() {
+            if !dirty_faces[start] || visited[start] {
+                continue;
+            }
+            let mut queue = std::collections::VecDeque::from([start]);
+            visited[start] = true;
+            let mut component = Vec::new();
+            while let Some(face) = queue.pop_front() {
+                component.push(face as u32);
+                for corner in mesh.face_corners(face) {
+                    if after.edge_kind(mesh, mesh.corner_edge(corner)) != EdgeKind::Interior {
+                        continue;
+                    }
+                    let Some(other_corner) = mesh.twin(corner) else {
+                        continue;
+                    };
+                    let other = mesh.corner_face(other_corner);
+                    if dirty_faces[other] && !visited[other] {
+                        visited[other] = true;
+                        queue.push_back(other);
+                    }
+                }
+            }
+            component.sort_unstable();
+            components.push(component);
+        }
+        components.sort_by_key(|faces| faces[0]);
+        let mut face_island = vec![0; mesh.face_count()];
+        for (island, faces) in components.iter().enumerate() {
+            for &face in faces {
+                face_island[face as usize] = island as u32;
+            }
+        }
+        Self {
+            face_island,
+            faces: components,
+        }
+    }
+
     pub fn count(&self) -> usize {
         self.faces.len()
     }
@@ -136,6 +211,8 @@ mod tests {
         cut.corner_uv[6] = 5;
         cut.corner_uv[7] = 6;
         let isl = Islands::compute(&m, &cut);
+        assert_eq!(Islands::compute(&m, &welded).update(&m, &welded, &cut), isl);
+        assert_eq!(isl.update(&m, &cut, &welded), Islands::compute(&m, &welded));
         assert_eq!(isl.count(), 2);
         assert_eq!(isl.faces(0), &[0, 1]);
         assert_eq!(isl.island_of_face(2), 1);
