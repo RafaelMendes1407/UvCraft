@@ -2354,7 +2354,10 @@ mod tests {
     #[test]
     fn non_object_json_root_is_an_error_not_a_panic() {
         for text in ["1", "[]", "null", "\"asset\""] {
-            assert!(parse(text.as_bytes().to_vec(), Path::new(".")).is_err(), "{text}");
+            assert!(
+                parse(text.as_bytes().to_vec(), Path::new(".")).is_err(),
+                "{text}"
+            );
         }
     }
 
