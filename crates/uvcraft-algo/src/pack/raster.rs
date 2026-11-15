@@ -688,14 +688,14 @@ impl Setup<'_> {
         scales.dedup();
         let mut best: Option<Packed> = None;
         for s in scales {
-            if let Some((placements, tiles_used)) = self.attempt_async(s, g, finder).await {
-                if best.as_ref().is_none_or(|b| s > b.scale) {
-                    best = Some(Packed {
-                        scale: s,
-                        placements,
-                        tiles_used,
-                    });
-                }
+            if let Some((placements, tiles_used)) = self.attempt_async(s, g, finder).await
+                && best.as_ref().is_none_or(|b| s > b.scale)
+            {
+                best = Some(Packed {
+                    scale: s,
+                    placements,
+                    tiles_used,
+                });
             }
         }
         best

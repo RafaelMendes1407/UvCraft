@@ -2993,8 +2993,8 @@ impl App {
                         islands: self.target_islands(),
                     });
                 }
-                if let Some(parent) = self.group_edit {
-                    if ui
+                if let Some(parent) = self.group_edit
+                    && ui
                         .button("Child")
                         .on_hover_text("Create a subgroup of the selected group")
                         .clicked()
@@ -3006,7 +3006,6 @@ impl App {
                             islands: self.target_islands(),
                         });
                     }
-                }
             });
             ui.horizontal(|ui| {
                 ui.label("Organize by");
@@ -3409,8 +3408,7 @@ impl App {
                         if ui
                             .add_enabled(group_mode, egui::Button::new("Individual"))
                             .clicked()
-                        {
-                            if let Some(first) = self
+                            && let Some(first) = self
                                 .session
                                 .document()
                                 .zip(self.scene.as_ref())
@@ -3418,9 +3416,8 @@ impl App {
                                     doc.island_groups().islands_in(group, &scene.islands).ok()
                                 })
                                 .and_then(|members| members.first().copied())
-                            {
-                                self.select_group_member(group, first);
-                            }
+                        {
+                            self.select_group_member(group, first);
                         }
                         ui.menu_button("Manage", |ui| {
                             if ui
@@ -7803,11 +7800,11 @@ impl App {
         }
         self.path_preview_key = key;
         self.path_preview_edges.fill(false);
-        if let (Some((from, to)), Some(doc)) = (key, self.session.document()) {
-            if let Some(path) = select::edge_path(&doc.mesh, from, to) {
-                for edge in path {
-                    self.path_preview_edges[edge] = true;
-                }
+        if let (Some((from, to)), Some(doc)) = (key, self.session.document())
+            && let Some(path) = select::edge_path(&doc.mesh, from, to)
+        {
+            for edge in path {
+                self.path_preview_edges[edge] = true;
             }
         }
         self.gpu_dirty = true;

@@ -308,10 +308,10 @@ impl IslandGroups {
             }
         }
         for owner in self.member_faces.values_mut() {
-            if *owner == id {
-                if let Some(parent) = group.parent {
-                    *owner = parent;
-                }
+            if *owner == id
+                && let Some(parent) = group.parent
+            {
+                *owner = parent;
             }
         }
         if group.parent.is_none() {

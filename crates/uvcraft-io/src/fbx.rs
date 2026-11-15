@@ -1002,7 +1002,7 @@ pub fn parse(bytes: &[u8]) -> Result<ObjDocument, FbxError> {
             .ok_or_else(|| FbxError::Parse("mesh has no Vertices".into()))?;
         let indices: Vec<i64> = array(body, "PolygonVertexIndex")?
             .ok_or_else(|| FbxError::Parse("mesh has no PolygonVertexIndex".into()))?;
-        if vertices.len() % 3 != 0 || vertices.is_empty() {
+        if !vertices.len().is_multiple_of(3) || vertices.is_empty() {
             return Err(FbxError::Parse("Vertices needs XYZ triples".into()));
         }
         if vertices.iter().any(|v| !v.is_finite()) {
@@ -1070,7 +1070,7 @@ pub fn parse(bytes: &[u8]) -> Result<ObjDocument, FbxError> {
             } else {
                 DMat4::IDENTITY
             };
-            for point in vertices.chunks_exact(3) {
+            for point in vertices.as_chunks::<3>().0 {
                 let p = coordinates
                     .convert(transform.transform_point3(DVec3::new(point[0], point[1], point[2])));
                 obj += &format!("v {} {} {}\n", p.x, p.y, p.z);
@@ -1258,7 +1258,7 @@ pub fn parse_layers(bytes: &[u8]) -> Result<FbxLayersDocument, FbxError> {
                 continue;
             };
             let values: Vec<f64> = array(layer_body, "UV")?.unwrap_or_default();
-            if values.len() % 2 != 0 {
+            if !values.len().is_multiple_of(2) {
                 return Err(FbxError::Parse("UV needs pairs".into()));
             }
             descs.push(LayerDesc {

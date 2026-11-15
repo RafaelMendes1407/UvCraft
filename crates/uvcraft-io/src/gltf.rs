@@ -226,7 +226,7 @@ fn parse_container(bytes: &[u8]) -> Result<ParsedContainer, GltfError> {
 pub(crate) fn build_glb(json: &[u8], bin: Option<&[u8]>, extra: &[(u32, Vec<u8>)]) -> Vec<u8> {
     let mut chunks: Vec<(u32, Vec<u8>)> = Vec::new();
     let mut j = json.to_vec();
-    while j.len() % 4 != 0 {
+    while !j.len().is_multiple_of(4) {
         j.push(b' ');
     }
     chunks.push((CHUNK_JSON, j));
@@ -701,7 +701,7 @@ fn load_buffers(
 /// ranges before accessor and sparse parsing. The original bytes remain on
 /// `GltfSource` only for source attribution; edited exports use decoded data.
 fn decode_meshopt_color(bytes: &mut [u8], stride: usize) -> Result<(), GltfError> {
-    if !matches!(stride, 4 | 8) || bytes.len() % stride != 0 {
+    if !matches!(stride, 4 | 8) || !bytes.len().is_multiple_of(stride) {
         return Err(invalid("meshopt COLOR requires 4 or 8 byte elements"));
     }
     let max = if stride == 4 { 255_i64 } else { 65535_i64 };
@@ -1022,7 +1022,12 @@ fn decode_draco_primitives(
 
 fn triangles(mode: usize, idx: &[u32]) -> Result<Vec<[u32; 3]>, GltfError> {
     Ok(match mode {
-        4 => idx.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+        4 => idx
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| [t[0], t[1], t[2]])
+            .collect(),
         5 => (0..idx.len().saturating_sub(2))
             .map(|i| {
                 if i % 2 == 0 {
@@ -1246,7 +1251,7 @@ impl Appender {
         stride: Option<usize>,
         mut accessor: Value,
     ) -> Result<usize, GltfError> {
-        while (self.base + self.data.len()) % 4 != 0 {
+        while !(self.base + self.data.len()).is_multiple_of(4) {
             self.data.push(0);
         }
         let offset = self.base + self.data.len();
@@ -2391,14 +2396,8 @@ mod tests {
 
     fn meshopt_glb() -> Vec<u8> {
         let (mut json, bin) = quad(true, false);
-        let positions: Vec<[u8; 12]> = bin[..72]
-            .chunks_exact(12)
-            .map(|bytes| bytes.try_into().unwrap())
-            .collect();
-        let texcoords: Vec<[u8; 8]> = bin[72..120]
-            .chunks_exact(8)
-            .map(|bytes| bytes.try_into().unwrap())
-            .collect();
+        let positions: Vec<[u8; 12]> = bin[..72].as_chunks::<12>().0.to_vec();
+        let texcoords: Vec<[u8; 8]> = bin[72..120].as_chunks::<8>().0.to_vec();
         let indices: [u32; 6] = [0, 1, 2, 5, 1, 3];
         let packed = [
             (
@@ -2479,8 +2478,10 @@ mod tests {
         rgba16.extend_from_slice(&0x9234_u16.to_le_bytes());
         decode_meshopt_color(&mut rgba16, 8).unwrap();
         let decoded: Vec<_> = rgba16
-            .chunks_exact(2)
-            .map(|bytes| u16::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
             .collect();
         assert_eq!(decoded, [23000, 18000, 21000, 9320]);
 

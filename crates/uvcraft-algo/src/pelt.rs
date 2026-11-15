@@ -57,10 +57,10 @@ pub fn geodesic_cut_graph(
                 }
             }
         }
-        if !network.iter().any(|&member| member) {
-            if let Some(&first) = vertices.first() {
-                network[first] = true;
-            }
+        if !network.iter().any(|&member| member)
+            && let Some(&first) = vertices.first()
+        {
+            network[first] = true;
         }
         let allowed: Vec<bool> = (0..mesh.edge_count())
             .map(|edge| {

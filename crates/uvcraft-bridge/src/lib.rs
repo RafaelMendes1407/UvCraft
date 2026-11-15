@@ -455,11 +455,11 @@ fn load_obj(
             return Err(error);
         }
     };
-    if !edges.is_empty() {
-        if let Err(error) = session.execute(Command::Cut { edges }) {
-            let _ = std::fs::remove_file(&path);
-            return Err(error.to_string());
-        }
+    if !edges.is_empty()
+        && let Err(error) = session.execute(Command::Cut { edges })
+    {
+        let _ = std::fs::remove_file(&path);
+        return Err(error.to_string());
     }
     Ok(RemoteSession {
         session,
