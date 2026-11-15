@@ -1084,6 +1084,9 @@ fn triangles(mode: usize, idx: &[u32]) -> Result<Vec<[u32; 3]>, GltfError> {
 pub fn parse(original: Vec<u8>, base_dir: &Path) -> Result<GltfDocument, GltfError> {
     let c = parse_container(&original)?;
     let mut json: Value = serde_json::from_slice(&c.json_chunk)?;
+    if !json.is_object() {
+        return Err(invalid("the glTF JSON root must be an object"));
+    }
     let (mut buffers, mut buffer_sources) = load_buffers(&json, c.kind, c.bin, base_dir)?;
     let decoded_meshopt = decode_meshopt_views(&mut json, &mut buffers)?;
     let decoded_draco = decode_draco_primitives(&mut json, &mut buffers, &mut buffer_sources)?;
@@ -2347,6 +2350,13 @@ impl GltfSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_object_json_root_is_an_error_not_a_panic() {
+        for text in ["1", "[]", "null", "\"asset\""] {
+            assert!(parse(text.as_bytes().to_vec(), Path::new(".")).is_err(), "{text}");
+        }
+    }
 
     #[test]
     fn external_buffers_must_be_relative_regular_files() {
