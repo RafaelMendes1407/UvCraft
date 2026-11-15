@@ -241,4 +241,5 @@ Complete list of planned UvCraft features, based on the RizomUV feature set (`Ri
 - [x] CI security workflow — M2 · D1 · independent jobs, pinned action SHAs, no persisted credentials, consolidated report that treats a missing job as `ERROR`; Dependabot for Cargo and Actions
 - [x] Hardened preference file — M2 · D1 · exclusive 0600 temporary file, refuses to write through a symlink
 - [x] Erasure of persisted data — M2 · D1 · `Preferences::clear`, the Preferences window's "Clear saved data" and `uvcraft-app --clear-preferences`
-- [x] Confined external glTF buffers — M2 · D1 · only relative paths to regular files (no absolute paths, URI schemes or device files)
+- [x] Confined external glTF buffers — M2 · D1 · only regular files inside the asset's folder (no absolute paths, URI schemes, `..`, escaping symlinks or device files)
+- [x] Loopback-only servers — M2 · D1 · `uvcraft serve` and `uvcraft bridge` both reject non-loopback addresses; JSON-RPC requests capped at 64 MiB

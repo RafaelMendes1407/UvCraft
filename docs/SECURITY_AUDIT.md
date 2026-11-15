@@ -106,17 +106,18 @@ unit test.
 
 ## Application hardening
 
-- **Untrusted meshes.** External glTF buffer URIs must be relative paths to
-  regular files: absolute paths, URI schemes and device files/FIFOs are
-  rejected, so a crafted `.gltf` cannot hang the loader on `/dev/zero` or pull
-  an arbitrary file into a later `.glb` export. Relative `..` segments are
-  still accepted because real assets share buffers across sibling folders.
+- **Untrusted meshes.** External glTF buffers must be regular files inside
+  the asset's folder: absolute paths, URI schemes, `..` segments (also
+  percent-encoded), symlinks resolving outside the folder and device
+  files/FIFOs are rejected, so a crafted `.gltf` cannot hang the loader on
+  `/dev/zero` or pull an arbitrary file into a later `.glb` export. Assets
+  that keep their buffers in a sibling folder must be moved next to them.
   Modified buffers are always written next to the output under generated
   names, and saves stage exclusive temporary files before renaming.
 - **JSON-RPC server.** Request lines are capped at 64 MiB. The server has no
-  authentication and listens on loopback by default; see `SECURITY.md`. The
-  Blender bridge (`uvcraft bridge`) already rejects non-loopback addresses,
-  uses a random token and read timeouts.
+  authentication and, like the Blender bridge (`uvcraft bridge`, which also
+  uses a random token and read timeouts), rejects non-loopback addresses
+  through the shared `uvcraft_bridge::loopback_addr`; see `SECURITY.md`.
 - **Preferences.** `preferences.json` (which stores selection sets keyed by
   mesh path, layouts and the texture path) is written through an exclusively
   created `0600` temporary file and never through a symbolic link.

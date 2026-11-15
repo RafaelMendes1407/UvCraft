@@ -21,9 +21,9 @@ UvCraft opens mesh files (OBJ, glTF/GLB, FBX) and command scripts that may come
 from untrusted sources; crashes, hangs, excessive memory use or file access
 outside the asset's own directory caused by such input are in scope. The
 JSON-RPC server (`uvcraft serve`) has no authentication and executes `load`
-and `save` with the server's file permissions, so it listens on loopback by
-default; binding it to another interface exposes those permissions to the
-network and is not a supported configuration.
+and `save` with the server's file permissions, so, like the Blender bridge,
+it refuses to bind to anything but a loopback address. Any local process can
+still connect to it.
 
 ## Supported versions
 
