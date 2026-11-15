@@ -1915,7 +1915,7 @@ checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "uvcraft-algo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "faer",
@@ -1931,7 +1931,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-commands"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "serde",
@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "thiserror 2.0.21",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "awsm-renderer-codec-meshopt",
  "base64",
