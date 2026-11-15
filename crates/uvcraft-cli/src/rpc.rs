@@ -27,17 +27,43 @@ pub fn serve(bind: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn serve_client(mut stream: TcpStream) -> Result<(), std::io::Error> {
-    let mut reader = BufReader::new(stream.try_clone()?);
+/// Largest accepted request line. Large edge/face lists fit comfortably; an
+/// endless line without a newline can no longer exhaust the server's memory.
+const MAX_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
+
+fn serve_client(stream: TcpStream) -> Result<(), std::io::Error> {
+    let reader = BufReader::new(stream.try_clone()?);
+    serve_lines(reader, stream, MAX_REQUEST_BYTES)
+}
+
+fn serve_lines(
+    mut reader: impl BufRead,
+    mut writer: impl Write,
+    max_bytes: u64,
+) -> Result<(), std::io::Error> {
     let mut session = Session::new();
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        let read = std::io::Read::take(&mut reader, max_bytes + 1).read_until(b'\n', &mut line)?;
+        if read == 0 {
             return Ok(());
         }
-        if let Some(response) = handle_line(&mut session, &line) {
-            writeln!(stream, "{response}")?;
+        if read as u64 > max_bytes {
+            let response = error(
+                Value::Null,
+                -32600,
+                format!("request exceeds {max_bytes} bytes"),
+            );
+            writeln!(writer, "{response}")?;
+            return Ok(());
+        }
+        let response = match std::str::from_utf8(&line) {
+            Ok(text) => handle_line(&mut session, text),
+            Err(_) => Some(error(Value::Null, -32700, "request is not valid UTF-8")),
+        };
+        if let Some(response) = response {
+            writeln!(writer, "{response}")?;
         }
     }
 }
@@ -123,6 +149,23 @@ fn handle_request(session: &mut Session, req: Value) -> Option<Value> {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn oversized_request_is_rejected_and_closes_the_connection() {
+        let input = format!(
+            "{}\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"status\"}}\n",
+            "x".repeat(100)
+        );
+        let mut out = Vec::new();
+        serve_lines(input.as_bytes(), &mut out, 64).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains("exceeds 64 bytes"), "{text}");
+
+        let mut out = Vec::new();
+        serve_lines(&b"\xff\xfe\n"[..], &mut out, 64).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("-32700"));
+    }
 
     #[test]
     fn rpc_protocol_and_session_errors() {
