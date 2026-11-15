@@ -1,0 +1,3 @@
+# Reviewed Gitleaks false positives, one fingerprint per line.
+# Every entry must match an exception in security/exceptions.json (with owner,
+# reason, review date and expiry); scripts/security_audit.py enforces this.

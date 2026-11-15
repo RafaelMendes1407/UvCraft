@@ -216,7 +216,9 @@ fn take_binding(ctx: &egui::Context, binding: &Binding) -> bool {
     })
 }
 use crate::render::{Renderer, UvStreamLayout, ViewParams};
-use crate::scene::{self, ColorMode, DistortionConfig, DistortionMetric, DistortionReference, Scene};
+use crate::scene::{
+    self, ColorMode, DistortionConfig, DistortionMetric, DistortionReference, Scene,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -353,7 +355,8 @@ fn select_drag_island(islands: &Islands, selected: &mut [bool], face: usize, add
 /// A group's container is a single pick target, including the empty space
 /// between its islands. The smaller box wins when containers overlap.
 fn pick_group_container(bounds: &[(u64, Rect)], pointer: Vec2) -> Option<u64> {
-    bounds.iter()
+    bounds
+        .iter()
         .filter(|(_, bounds)| bounds.contains(Pos2::new(pointer.x, pointer.y)))
         .min_by(|a, b| {
             let area = |rect: Rect| rect.width() * rect.height();
@@ -2316,18 +2319,33 @@ impl App {
     }
 
     fn stack_preview_ui(&self, ui: &mut egui::Ui, selected: &[usize], reference: usize) {
-        let (Some(doc), Some(scene)) = (self.session.document(), self.scene.as_ref()) else { return; };
+        let (Some(doc), Some(scene)) = (self.session.document(), self.scene.as_ref()) else {
+            return;
+        };
         let mut targets = selected.to_vec();
         if let Some(pos) = targets.iter().position(|&island| island == reference) {
             targets.swap(0, pos);
         }
         let mut planned = doc.uv().clone();
         let report = if self.stack_conform {
-            stack::stack_conform_to_reference(&doc.mesh, &mut planned, &scene.islands,
-                &targets, StackMode::Similar, 0.05, 4.0)
+            stack::stack_conform_to_reference(
+                &doc.mesh,
+                &mut planned,
+                &scene.islands,
+                &targets,
+                StackMode::Similar,
+                0.05,
+                4.0,
+            )
         } else {
-            stack::stack_to_reference(&doc.mesh, &mut planned, &scene.islands,
-                &targets, StackMode::Similar, 0.05)
+            stack::stack_to_reference(
+                &doc.mesh,
+                &mut planned,
+                &scene.islands,
+                &targets,
+                StackMode::Similar,
+                0.05,
+            )
         };
         ui.label(format!("Reference island: {reference}"));
         for (island, reason) in &report.failed {
@@ -2338,40 +2356,66 @@ impl App {
             return;
         }
         for match_info in &report.matches {
-            ui.label(format!("Island {}: {:?}, max {:.4}%, mean {:.4}%, overlap {:.2}%, scale {:.4}{}",
-                match_info.island, match_info.quality,
+            ui.label(format!(
+                "Island {}: {:?}, max {:.4}%, mean {:.4}%, overlap {:.2}%, scale {:.4}{}",
+                match_info.island,
+                match_info.quality,
                 match_info.max_boundary_error * 100.0,
                 match_info.mean_boundary_error * 100.0,
-                match_info.overlap_fraction * 100.0, match_info.scale,
-                if match_info.mirrored { ", mirrored" } else { "" }));
+                match_info.overlap_fraction * 100.0,
+                match_info.scale,
+                if match_info.mirrored {
+                    ", mirrored"
+                } else {
+                    ""
+                }
+            ));
         }
         let mut outlines: Vec<(usize, Vec<[DVec2; 2]>)> = Vec::new();
         for island in std::iter::once(reference).chain(report.matches.iter().map(|m| m.island)) {
             let mut segments = Vec::new();
             for &face in scene.islands.faces(island) {
                 for corner in doc.mesh.face_corners(face as usize) {
-                    if planned.edge_kind(&doc.mesh, doc.mesh.corner_edge(corner)) != EdgeKind::Interior {
-                        segments.push([planned.uv_at_corner(corner),
-                            planned.uv_at_corner(doc.mesh.next(corner))]);
+                    if planned.edge_kind(&doc.mesh, doc.mesh.corner_edge(corner))
+                        != EdgeKind::Interior
+                    {
+                        segments.push([
+                            planned.uv_at_corner(corner),
+                            planned.uv_at_corner(doc.mesh.next(corner)),
+                        ]);
                     }
                 }
             }
             outlines.push((island, segments));
         }
-        let points = outlines.iter().flat_map(|(_, segments)| segments.iter().flatten());
-        let (lo, hi) = points.fold((DVec2::INFINITY, DVec2::NEG_INFINITY),
-            |(lo, hi), &p| (lo.min(p), hi.max(p)));
-        let (rect, _) = ui.allocate_exact_size(EVec2::new(ui.available_width().max(160.0), 190.0), Sense::hover());
+        let points = outlines
+            .iter()
+            .flat_map(|(_, segments)| segments.iter().flatten());
+        let (lo, hi) = points.fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(lo, hi), &p| {
+            (lo.min(p), hi.max(p))
+        });
+        let (rect, _) = ui.allocate_exact_size(
+            EVec2::new(ui.available_width().max(160.0), 190.0),
+            Sense::hover(),
+        );
         let width = (hi.x - lo.x).max(1e-9);
         let height = (hi.y - lo.y).max(1e-9);
-        let scale = ((rect.width() - 20.0) as f64 / width)
-            .min((rect.height() - 20.0) as f64 / height);
+        let scale =
+            ((rect.width() - 20.0) as f64 / width).min((rect.height() - 20.0) as f64 / height);
         let center = (lo + hi) * 0.5;
-        let map = |p: DVec2| Pos2::new(rect.center().x + ((p.x - center.x) * scale) as f32,
-            rect.center().y - ((p.y - center.y) * scale) as f32);
+        let map = |p: DVec2| {
+            Pos2::new(
+                rect.center().x + ((p.x - center.x) * scale) as f32,
+                rect.center().y - ((p.y - center.y) * scale) as f32,
+            )
+        };
         let painter = ui.painter_at(rect);
         for (island, segments) in outlines {
-            let color = if island == reference { Color32::YELLOW } else { Color32::LIGHT_BLUE };
+            let color = if island == reference {
+                Color32::YELLOW
+            } else {
+                Color32::LIGHT_BLUE
+            };
             for [a, b] in segments {
                 painter.line_segment([map(a), map(b)], egui::Stroke::new(2.0, color));
             }
@@ -2459,7 +2503,11 @@ impl App {
                         ui.weak("No Blender profile found; choose its add-ons folder below.");
                     }
                     for (label, path) in targets {
-                        if ui.button(label).on_hover_text(path.display().to_string()).clicked() {
+                        if ui
+                            .button(label)
+                            .on_hover_text(path.display().to_string())
+                            .clicked()
+                        {
                             self.install_blender_addon(&path);
                             ui.close();
                         }
@@ -2901,17 +2949,28 @@ impl App {
     }
 
     fn group_panel(&mut self, ui: &mut egui::Ui) {
-        if let Some(group) = self.group_edit.filter(|&group| self.session.document()
-            .is_some_and(|doc| doc.island_groups().get(group).is_some())) {
+        if let Some(group) = self.group_edit.filter(|&group| {
+            self.session
+                .document()
+                .is_some_and(|doc| doc.island_groups().get(group).is_some())
+        }) {
             ui.horizontal(|ui| {
                 ui.label("Group name");
-                ui.add(egui::TextEdit::singleline(&mut self.group_rename)
-                    .desired_width(110.0));
-                if ui.add_enabled(!self.group_rename.trim().is_empty(),
-                    egui::Button::new("Rename")).clicked() {
+                ui.add(egui::TextEdit::singleline(&mut self.group_rename).desired_width(110.0));
+                if ui
+                    .add_enabled(
+                        !self.group_rename.trim().is_empty(),
+                        egui::Button::new("Rename"),
+                    )
+                    .clicked()
+                {
                     self.execute(Command::SetIslandGroup {
-                        group, name: Some(self.group_rename.clone()),
-                        color: None, locked: None, visible: None, selected: None,
+                        group,
+                        name: Some(self.group_rename.clone()),
+                        color: None,
+                        locked: None,
+                        visible: None,
+                        selected: None,
                     });
                 }
             });
@@ -2934,8 +2993,8 @@ impl App {
                         islands: self.target_islands(),
                     });
                 }
-                if let Some(parent) = self.group_edit {
-                    if ui
+                if let Some(parent) = self.group_edit
+                    && ui
                         .button("Child")
                         .on_hover_text("Create a subgroup of the selected group")
                         .clicked()
@@ -2947,7 +3006,6 @@ impl App {
                             islands: self.target_islands(),
                         });
                     }
-                }
             });
             ui.horizontal(|ui| {
                 ui.label("Organize by");
@@ -3339,7 +3397,8 @@ impl App {
                             )
                             .clicked()
                         {
-                            self.group_rename = nodes.iter()
+                            self.group_rename = nodes
+                                .iter()
                                 .find(|node| node.0 == group)
                                 .map_or(String::new(), |node| node.1.clone());
                             self.group_selection = Some(group);
@@ -3349,8 +3408,7 @@ impl App {
                         if ui
                             .add_enabled(group_mode, egui::Button::new("Individual"))
                             .clicked()
-                        {
-                            if let Some(first) = self
+                            && let Some(first) = self
                                 .session
                                 .document()
                                 .zip(self.scene.as_ref())
@@ -3358,9 +3416,8 @@ impl App {
                                     doc.island_groups().islands_in(group, &scene.islands).ok()
                                 })
                                 .and_then(|members| members.first().copied())
-                            {
-                                self.select_group_member(group, first);
-                            }
+                        {
+                            self.select_group_member(group, first);
                         }
                         ui.menu_button("Manage", |ui| {
                             if ui
@@ -3538,18 +3595,32 @@ impl App {
         }
         if self.reference_tab == 1
             && let Some(running) = &self.running
-            && matches!(&running.cmd, Command::Pack { .. }) {
+            && matches!(&running.cmd, Command::Pack { .. })
+        {
             ui.group(|ui| {
                 ui.label("Packing UV islands…");
                 if let Some(progress) = &running.progress {
-                    let fraction = if progress.total == 0 { 0.0 }
-                        else { progress.completed as f32 / progress.total as f32 };
-                    ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
-                        .text(format!("{} {}/{}", progress.phase,
-                            progress.completed, progress.total)));
-                } else { ui.spinner(); }
-                if ui.add_enabled(!running.cancel.is_cancelled(),
-                    egui::Button::new("Stop packing")).clicked() {
+                    let fraction = if progress.total == 0 {
+                        0.0
+                    } else {
+                        progress.completed as f32 / progress.total as f32
+                    };
+                    ui.add(
+                        egui::ProgressBar::new(fraction.clamp(0.0, 1.0)).text(format!(
+                            "{} {}/{}",
+                            progress.phase, progress.completed, progress.total
+                        )),
+                    );
+                } else {
+                    ui.spinner();
+                }
+                if ui
+                    .add_enabled(
+                        !running.cancel.is_cancelled(),
+                        egui::Button::new("Stop packing"),
+                    )
+                    .clicked()
+                {
                     running.cancel.cancel();
                     self.jobs.clear();
                 }
@@ -3946,21 +4017,33 @@ impl App {
         egui::CollapsingHeader::new("Transform")
             .default_open(true)
             .show(ui, |ui| {
-                ui.checkbox(&mut self.gizmo_enabled, "Show UV move, rotate and scale handles")
-                    .on_hover_text("Select an island or group, then drag the colored handles in the UV editor");
+                ui.checkbox(
+                    &mut self.gizmo_enabled,
+                    "Show UV move, rotate and scale handles",
+                )
+                .on_hover_text(
+                    "Select an island or group, then drag the colored handles in the UV editor",
+                );
                 let selected = self.group_selection.is_some() || !self.target_islands().is_empty();
                 if selected {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(if self.group_selection.is_some() { "Selected group" }
-                            else { "Selected islands" });
+                        ui.label(if self.group_selection.is_some() {
+                            "Selected group"
+                        } else {
+                            "Selected islands"
+                        });
                         for (label, angle, scale) in [
-                            ("CCW 90°", -90.0, 1.0), ("CW 90°", 90.0, 1.0),
-                            ("90%", 0.0, 0.9), ("110%", 0.0, 1.1),
+                            ("CCW 90°", -90.0, 1.0),
+                            ("CW 90°", 90.0, 1.0),
+                            ("90%", 0.0, 0.9),
+                            ("110%", 0.0, 1.1),
                         ] {
                             if ui.small_button(label).clicked() {
                                 self.execute(Command::Transform {
-                                    islands: self.target_islands(), translate: [0.0; 2],
-                                    rotate_deg: angle, scale: [scale; 2],
+                                    islands: self.target_islands(),
+                                    translate: [0.0; 2],
+                                    rotate_deg: angle,
+                                    scale: [scale; 2],
                                     pivot: Pivot::IslandCenter,
                                 });
                             }
@@ -3992,7 +4075,8 @@ impl App {
                         if self.group_selection.is_some() && scale_x.changed() {
                             self.reference_scale[1] = self.reference_scale[0];
                         }
-                        ui.add_enabled(self.group_selection.is_none(),
+                        ui.add_enabled(
+                            self.group_selection.is_none(),
                             egui::DragValue::new(&mut self.reference_scale[1])
                                 .range(0.001..=1000.0)
                                 .speed(0.01)
@@ -4002,14 +4086,23 @@ impl App {
                     });
                 ui.horizontal(|ui| {
                     ui.label("Rotate");
-                    ui.add_sized([180.0, 20.0], egui::Slider::new(
-                        &mut self.reference_rotation, -180.0..=180.0)
-                        .step_by(0.1).show_value(false))
-                        .on_hover_text("Drag left for negative rotation; drag right for positive rotation");
-                    ui.add(egui::DragValue::new(&mut self.reference_rotation)
-                        .speed(0.1).range(-3600.0..=3600.0)
-                        .fixed_decimals(1).suffix("°"))
-                        .on_hover_text("Type a precise angle, including negative values");
+                    ui.add_sized(
+                        [180.0, 20.0],
+                        egui::Slider::new(&mut self.reference_rotation, -180.0..=180.0)
+                            .step_by(0.1)
+                            .show_value(false),
+                    )
+                    .on_hover_text(
+                        "Drag left for negative rotation; drag right for positive rotation",
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.reference_rotation)
+                            .speed(0.1)
+                            .range(-3600.0..=3600.0)
+                            .fixed_decimals(1)
+                            .suffix("°"),
+                    )
+                    .on_hover_text("Type a precise angle, including negative values");
                 });
                 let changed = self.reference_position != [0.0; 2]
                     || self.reference_scale != [1.0; 2]
@@ -5436,12 +5529,16 @@ impl App {
 
     fn distortion_config(&self) -> DistortionConfig {
         let selected_islands = if let Some(group) = self.group_selection {
-            self.session.document().zip(self.scene.as_ref())
-                .and_then(|(doc, scene)| doc.island_groups()
-                    .islands_in(group, &scene.islands).ok())
+            self.session
+                .document()
+                .zip(self.scene.as_ref())
+                .and_then(|(doc, scene)| doc.island_groups().islands_in(group, &scene.islands).ok())
                 .unwrap_or_default()
-        } else { self.target_islands() };
-        let active_island = self.distortion_active_island
+        } else {
+            self.target_islands()
+        };
+        let active_island = self
+            .distortion_active_island
             .filter(|island| selected_islands.contains(island))
             .or_else(|| selected_islands.first().copied());
         DistortionConfig {
@@ -5653,16 +5750,22 @@ impl App {
                 );
                 if self.color_mode == ColorMode::Distortion
                     && !self.drag_selection_dirty
-                    && (self.gizmo_drag.is_some() || self.pin_drag.is_some()
-                        || self.density_drag.is_some()) {
+                    && (self.gizmo_drag.is_some()
+                        || self.pin_drag.is_some()
+                        || self.density_drag.is_some())
+                {
                     let tri_uv: Vec<_> = tris.iter().map(|vertex| vertex.uv).collect();
                     let tri_color: Vec<_> = tris.iter().map(|vertex| vertex.color).collect();
                     let wire_uv: Vec<_> = wire.iter().map(|vertex| vertex.uv).collect();
                     let edge_uv: Vec<_> = edges.iter().map(|vertex| vertex.uv).collect();
-                    if renderer.set_scene_uvs_and_colors(rs, &tri_uv, &tri_color,
-                        &wire_uv, &edge_uv) {
-                        self.last_preview_uv_ids = uv.uvs.iter()
-                            .zip(&doc.uv().uvs).enumerate()
+                    if renderer
+                        .set_scene_uvs_and_colors(rs, &tri_uv, &tri_color, &wire_uv, &edge_uv)
+                    {
+                        self.last_preview_uv_ids = uv
+                            .uvs
+                            .iter()
+                            .zip(&doc.uv().uvs)
+                            .enumerate()
                             .filter_map(|(i, (point, base))| (point != base).then_some(i as u32))
                             .collect();
                         self.gpu_dirty = false;
@@ -6016,49 +6119,67 @@ impl App {
                 self.resolution,
             )
         });
-        doc.island_groups().nodes().filter(|node| node.visible)
+        doc.island_groups()
+            .nodes()
+            .filter(|node| node.visible)
             .filter_map(|node| {
-                let members = doc.island_groups().islands_in(node.id, &scene.islands).ok()?;
-                if members.is_empty() { return None; }
+                let members = doc
+                    .island_groups()
+                    .islands_in(node.id, &scene.islands)
+                    .ok()?;
+                if members.is_empty() {
+                    return None;
+                }
                 let mut lo = DVec2::INFINITY;
                 let mut hi = DVec2::NEG_INFINITY;
                 for island in members {
                     for index in scene.islands.uv_indices(island, &doc.mesh, doc.uv()) {
                         let mut point = doc.uv().uvs[index as usize];
                         if self.group_selection == Some(node.id)
-                            && let Some(transform) = preview {
+                            && let Some(transform) = preview
+                        {
                             point = gizmo::apply(point, transform);
                         }
                         lo = lo.min(point);
                         hi = hi.max(point);
                     }
                 }
-                if !lo.is_finite() || !hi.is_finite() { return None; }
+                if !lo.is_finite() || !hi.is_finite() {
+                    return None;
+                }
                 let a = self.camuv.uv_to_screen(lo.as_vec2(), size);
                 let b = self.camuv.uv_to_screen(hi.as_vec2(), size);
-                let bounds = Rect::from_two_pos(Pos2::new(a.x, a.y), Pos2::new(b.x, b.y))
-                    .expand(11.0);
+                let bounds =
+                    Rect::from_two_pos(Pos2::new(a.x, a.y), Pos2::new(b.x, b.y)).expand(11.0);
                 let color = if node.id > 1 && node.color == [128, 180, 240, 255] {
                     let [r, g, b] = scene::island_color(node.id as usize);
-                    Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8,
-                        (b * 255.0) as u8)
+                    Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
                 } else {
                     Color32::from_rgb(node.color[0], node.color[1], node.color[2])
                 };
                 Some((node.id, bounds, color, node.name.clone()))
-            }).collect()
+            })
+            .collect()
     }
 
     fn group_at_screen(&self, pointer: Vec2, size: Vec2) -> Option<u64> {
-        let bounds: Vec<_> = self.group_screen_bounds(size).into_iter()
-            .map(|(group, bounds, _, _)| (group, bounds)).collect();
+        let bounds: Vec<_> = self
+            .group_screen_bounds(size)
+            .into_iter()
+            .map(|(group, bounds, _, _)| (group, bounds))
+            .collect();
         pick_group_container(&bounds, pointer)
     }
 
     fn select_group_in_uv(&mut self, group: u64) {
-        let members = self.session.document().zip(self.scene.as_ref())
+        let members = self
+            .session
+            .document()
+            .zip(self.scene.as_ref())
             .and_then(|(doc, scene)| doc.island_groups().islands_in(group, &scene.islands).ok());
-        let Some(members) = members else { return; };
+        let Some(members) = members else {
+            return;
+        };
         self.set_view_mode(1, SelectMode::Islands);
         self.sel_faces.fill(false);
         if let Some(scene) = &self.scene {
@@ -6071,8 +6192,11 @@ impl App {
             }
         }
         self.group_edit = Some(group);
-        if let Some(name) = self.session.document().and_then(|doc|
-            doc.island_groups().get(group).map(|node| node.name.clone())) {
+        if let Some(name) = self
+            .session
+            .document()
+            .and_then(|doc| doc.island_groups().get(group).map(|node| node.name.clone()))
+        {
             self.group_rename = name;
         }
         self.group_selection = Some(group);
@@ -6084,13 +6208,24 @@ impl App {
         for (group, local, color, name) in self.group_screen_bounds(size) {
             let bounds = local.translate(rect.min.to_vec2());
             let selected = self.group_selection == Some(group);
-            painter.rect_filled(bounds, 5.0, color.gamma_multiply(if selected { 0.18 } else { 0.09 }));
-            painter.rect_stroke(bounds, 5.0,
+            painter.rect_filled(
+                bounds,
+                5.0,
+                color.gamma_multiply(if selected { 0.18 } else { 0.09 }),
+            );
+            painter.rect_stroke(
+                bounds,
+                5.0,
                 egui::Stroke::new(if selected { 2.5 } else { 1.5 }, color),
-                egui::StrokeKind::Inside);
-            painter.text(bounds.left_top() + EVec2::new(6.0, 4.0),
-                egui::Align2::LEFT_TOP, format!("Group · {name}"),
-                egui::FontId::proportional(12.0), color);
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                bounds.left_top() + EVec2::new(6.0, 4.0),
+                egui::Align2::LEFT_TOP,
+                format!("Group · {name}"),
+                egui::FontId::proportional(12.0),
+                color,
+            );
         }
     }
 
@@ -6101,26 +6236,42 @@ impl App {
             return;
         };
         let mesh = &doc.mesh;
-        let uv = self.pin_drag.as_ref().map_or(doc.uv(), |drag| &drag.preview);
+        let uv = self
+            .pin_drag
+            .as_ref()
+            .map_or(doc.uv(), |drag| &drag.preview);
         let seam_edges: Vec<bool> = (0..mesh.edge_count())
             .map(|edge| uv.edge_kind(mesh, edge) == EdgeKind::Seam)
             .collect();
         let preview = self.gizmo_drag.as_ref().map(|drag| {
-            (gizmo::transform(drag.handle, drag.start, drag.current, drag.center,
-                self.gizmo_snap, self.resolution),
-                drag.islands.iter().copied().collect::<BTreeSet<_>>())
+            (
+                gizmo::transform(
+                    drag.handle,
+                    drag.start,
+                    drag.current,
+                    drag.center,
+                    self.gizmo_snap,
+                    self.resolution,
+                ),
+                drag.islands.iter().copied().collect::<BTreeSet<_>>(),
+            )
         });
         let painter = ui.painter_at(rect);
         for corner in 0..mesh.corner_count() {
             let face = mesh.corner_face(corner);
-            if self.hidden.get(face).copied().unwrap_or(false) { continue; }
+            if self.hidden.get(face).copied().unwrap_or(false) {
+                continue;
+            }
             let edge = mesh.corner_edge(corner);
             let selected = self.sel_edges.get(edge).copied().unwrap_or(false);
-            if !seam_edges[edge] || (!self.overlay_seams && !selected) { continue; }
+            if !seam_edges[edge] || (!self.overlay_seams && !selected) {
+                continue;
+            }
             let point = |c| {
                 let mut point = uv.uv_at_corner(c);
                 if let Some((transform, islands)) = &preview
-                    && islands.contains(&scene.islands.island_of_face(face)) {
+                    && islands.contains(&scene.islands.island_of_face(face))
+                {
                     point = gizmo::apply(point, *transform);
                 }
                 point.is_finite().then(|| {
@@ -6132,15 +6283,23 @@ impl App {
                 continue;
             };
             if selected {
-                painter.line_segment([a, b], egui::Stroke::new(6.0,
-                    Color32::from_rgb(105, 40, 8)));
-                painter.line_segment([a, b], egui::Stroke::new(4.2,
-                    Color32::from_rgb(255, 126, 25)));
-                painter.line_segment([a, b], egui::Stroke::new(1.7,
-                    Color32::from_rgb(255, 238, 75)));
+                painter.line_segment(
+                    [a, b],
+                    egui::Stroke::new(6.0, Color32::from_rgb(105, 40, 8)),
+                );
+                painter.line_segment(
+                    [a, b],
+                    egui::Stroke::new(4.2, Color32::from_rgb(255, 126, 25)),
+                );
+                painter.line_segment(
+                    [a, b],
+                    egui::Stroke::new(1.7, Color32::from_rgb(255, 238, 75)),
+                );
             } else {
-                painter.line_segment([a, b], egui::Stroke::new(3.5,
-                    Color32::from_rgb(255, 126, 25)));
+                painter.line_segment(
+                    [a, b],
+                    egui::Stroke::new(3.5, Color32::from_rgb(255, 126, 25)),
+                );
             }
         }
     }
@@ -6389,25 +6548,33 @@ impl App {
             && rect.contains(origin)
         {
             let start = self.camuv.screen_to_uv(local(origin), size).as_dvec2();
-            let group = (!modifiers.shift).then(|| self.group_at_screen(local(origin), size)).flatten();
+            let group = (!modifiers.shift)
+                .then(|| self.group_at_screen(local(origin), size))
+                .flatten();
             if let Some(group) = group {
                 self.select_group_in_uv(group);
-                let islands = self.session.document().zip(self.scene.as_ref())
-                    .and_then(|(doc, scene)| doc.island_groups()
-                        .islands_in(group, &scene.islands).ok()).unwrap_or_default();
+                let islands = self
+                    .session
+                    .document()
+                    .zip(self.scene.as_ref())
+                    .and_then(|(doc, scene)| {
+                        doc.island_groups().islands_in(group, &scene.islands).ok()
+                    })
+                    .unwrap_or_default();
                 self.gizmo_drag = Some(GizmoDrag {
-                    handle: GizmoHandle::Move, start, current: start, center: start, islands,
+                    handle: GizmoHandle::Move,
+                    start,
+                    current: start,
+                    center: start,
+                    islands,
                 });
                 self.gpu_dirty = true;
             } else if let (Some(doc), Some(scene)) = (self.session.document(), &self.scene)
-                && let Some(face) = scene::pick_face_uv(doc.uv(), scene, start) {
-                    self.group_selection = None;
-                    self.drag_selection_dirty = select_drag_island(
-                        &scene.islands,
-                        &mut self.sel_faces,
-                        face,
-                        modifiers.shift,
-                    );
+                && let Some(face) = scene::pick_face_uv(doc.uv(), scene, start)
+            {
+                self.group_selection = None;
+                self.drag_selection_dirty =
+                    select_drag_island(&scene.islands, &mut self.sel_faces, face, modifiers.shift);
                 self.gizmo_drag = Some(GizmoDrag {
                     handle: GizmoHandle::Move,
                     start,
@@ -6733,25 +6900,41 @@ impl App {
                 Color32::WHITE,
             );
         }
-        if view == 1 && self.color_mode == ColorMode::Distortion
-            && let (Some(doc), Some(scene)) = (self.session.document(), self.scene.as_ref()) {
+        if view == 1
+            && self.color_mode == ColorMode::Distortion
+            && let (Some(doc), Some(scene)) = (self.session.document(), self.scene.as_ref())
+        {
             let painter = ui.painter_at(rect);
-            for &(_, tri) in scene.tris.iter().filter(|(face, tri)| {
-                let island = scene.islands.island_of_face(*face as usize);
-                scene.distortion_maps[tri[1] as usize]
-                    .is_none_or(|map| (map.uv_area < 0.0) != scene.report.islands[island].flipped)
-            }).take(128) {
+            for &(_, tri) in scene
+                .tris
+                .iter()
+                .filter(|(face, tri)| {
+                    let island = scene.islands.island_of_face(*face as usize);
+                    scene.distortion_maps[tri[1] as usize].is_none_or(|map| {
+                        (map.uv_area < 0.0) != scene.report.islands[island].flipped
+                    })
+                })
+                .take(128)
+            {
                 let q = tri.map(|c| doc.uv().uv_at_corner(c as usize));
                 let center = (q[0] + q[1] + q[2]) / 3.0;
-                if !center.is_finite() { continue; }
+                if !center.is_finite() {
+                    continue;
+                }
                 let local = self.camuv.uv_to_screen(center.as_vec2(), size);
                 let pos = rect.min + EVec2::new(local.x, local.y);
-                if !rect.contains(pos) { continue; }
+                if !rect.contains(pos) {
+                    continue;
+                }
                 let degenerate = scene.distortion_maps[tri[1] as usize].is_none();
                 painter.circle_filled(pos, 7.0, Color32::from_black_alpha(210));
-                painter.text(pos, egui::Align2::CENTER_CENTER,
+                painter.text(
+                    pos,
+                    egui::Align2::CENTER_CENTER,
                     if degenerate { "!" } else { "↺" },
-                    egui::FontId::proportional(12.0), Color32::WHITE);
+                    egui::FontId::proportional(12.0),
+                    Color32::WHITE,
+                );
             }
         }
         if view == 1 && self.grid_visible {
@@ -7039,34 +7222,60 @@ impl App {
                 ui.close();
             }
         }
-        if matches!(mode, SelectMode::Faces | SelectMode::Islands | SelectMode::Objects) {
+        if matches!(
+            mode,
+            SelectMode::Faces | SelectMode::Islands | SelectMode::Objects
+        ) {
             ui.separator();
             ui.label(egui::RichText::new("Island groups").strong());
-            if ui.add_enabled(selected_islands.len() >= 2,
-                egui::Button::new("Create group")).clicked() {
+            if ui
+                .add_enabled(
+                    selected_islands.len() >= 2,
+                    egui::Button::new("Create group"),
+                )
+                .clicked()
+            {
                 let name = self.session.document().map_or_else(
                     || "Group 1".to_owned(),
                     |doc| next_group_name(doc.island_groups()),
                 );
                 self.execute(Command::CreateIslandGroup {
-                    name, parent: None,
-                    children: Vec::new(), islands: selected_islands.clone(),
+                    name,
+                    parent: None,
+                    children: Vec::new(),
+                    islands: selected_islands.clone(),
                 });
                 ui.close();
             }
-            let groups: Vec<_> = self.session.document().zip(self.scene.as_ref())
-                .map(|(doc, scene)| doc.island_groups().nodes()
-                    .filter_map(|group| doc.island_groups()
-                        .islands_in(group.id, &scene.islands).ok()
-                        .map(|members| (group.id, group.name.clone(), members)))
-                    .collect()).unwrap_or_default();
+            let groups: Vec<_> = self
+                .session
+                .document()
+                .zip(self.scene.as_ref())
+                .map(|(doc, scene)| {
+                    doc.island_groups()
+                        .nodes()
+                        .filter_map(|group| {
+                            doc.island_groups()
+                                .islands_in(group.id, &scene.islands)
+                                .ok()
+                                .map(|members| (group.id, group.name.clone(), members))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             ui.add_enabled_ui(!selected_islands.is_empty() && !groups.is_empty(), |ui| {
                 ui.menu_button("Add to group", |ui| {
                     for (group, name, members) in &groups {
-                        if ui.add_enabled(selected_islands.iter().any(|i| !members.contains(i)),
-                            egui::Button::new(name)).clicked() {
+                        if ui
+                            .add_enabled(
+                                selected_islands.iter().any(|i| !members.contains(i)),
+                                egui::Button::new(name),
+                            )
+                            .clicked()
+                        {
                             self.execute(Command::AddIslandsToGroup {
-                                group: *group, islands: selected_islands.clone(),
+                                group: *group,
+                                islands: selected_islands.clone(),
                             });
                             ui.close();
                         }
@@ -7074,12 +7283,18 @@ impl App {
                 });
                 ui.menu_button("Remove from group", |ui| {
                     for (group, name, members) in &groups {
-                        let selected_members: Vec<_> = selected_islands.iter().copied()
-                            .filter(|i| members.contains(i)).collect();
-                        if ui.add_enabled(!selected_members.is_empty(),
-                            egui::Button::new(name)).clicked() {
+                        let selected_members: Vec<_> = selected_islands
+                            .iter()
+                            .copied()
+                            .filter(|i| members.contains(i))
+                            .collect();
+                        if ui
+                            .add_enabled(!selected_members.is_empty(), egui::Button::new(name))
+                            .clicked()
+                        {
                             self.execute(Command::RemoveIslandsFromGroup {
-                                group: *group, islands: selected_members,
+                                group: *group,
+                                islands: selected_members,
                             });
                             ui.close();
                         }
@@ -7229,8 +7444,13 @@ impl App {
                 (ColorMode::Overlaps, "Overlaps"),
                 (ColorMode::TexelDensity, "Texel Density"),
             ] {
-                if ui.add_enabled(mode != ColorMode::Texture || self.texture_path.is_some(),
-                    egui::Button::selectable(mode == self.color_mode, label)).clicked() {
+                if ui
+                    .add_enabled(
+                        mode != ColorMode::Texture || self.texture_path.is_some(),
+                        egui::Button::selectable(mode == self.color_mode, label),
+                    )
+                    .clicked()
+                {
                     self.color_mode = mode;
                     self.gpu_dirty = true;
                     ui.close();
@@ -7580,11 +7800,11 @@ impl App {
         }
         self.path_preview_key = key;
         self.path_preview_edges.fill(false);
-        if let (Some((from, to)), Some(doc)) = (key, self.session.document()) {
-            if let Some(path) = select::edge_path(&doc.mesh, from, to) {
-                for edge in path {
-                    self.path_preview_edges[edge] = true;
-                }
+        if let (Some((from, to)), Some(doc)) = (key, self.session.document())
+            && let Some(path) = select::edge_path(&doc.mesh, from, to)
+        {
+            for edge in path {
+                self.path_preview_edges[edge] = true;
             }
         }
         self.gpu_dirty = true;
@@ -7877,8 +8097,11 @@ impl App {
     }
 
     fn click(&mut self, view: usize, p: Vec2, size: Vec2, m: Modifiers) {
-        if view == 1 && self.mode == SelectMode::Islands && !m.shift
-            && let Some(group) = self.group_at_screen(p, size) {
+        if view == 1
+            && self.mode == SelectMode::Islands
+            && !m.shift
+            && let Some(group) = self.group_at_screen(p, size)
+        {
             self.select_group_in_uv(group);
             return;
         }
@@ -8241,6 +8464,7 @@ impl eframe::App for App {
 
         if self.show_preferences {
             let mut reset = false;
+            let mut erase = false;
             let mut save_layout = false;
             let mut load_layout = None;
             let mut delete_layout = None;
@@ -8426,7 +8650,16 @@ impl eframe::App for App {
                             }
                         }
                     });
-                    reset = ui.button("Reset defaults").clicked();
+                    ui.horizontal(|ui| {
+                        reset = ui.button("Reset defaults").clicked();
+                        erase = ui
+                            .button("Clear saved data")
+                            .on_hover_text(
+                                "Delete the preferences file, including saved selection sets, \
+                                 layout presets and recently used mesh/texture paths",
+                            )
+                            .clicked();
+                    });
                 });
             if save_layout {
                 let name = self.layout_name.trim().to_owned();
@@ -8446,6 +8679,14 @@ impl eframe::App for App {
             }
             if reset {
                 self.apply_preferences(&Preferences::default());
+            }
+            if erase {
+                self.apply_preferences(&Preferences::default());
+                self.saved_prefs = Preferences::default();
+                match self.prefs_path.as_deref().map(Preferences::clear) {
+                    Some(Err(e)) => self.set_status(format!("could not clear preferences: {e}")),
+                    _ => self.set_status("cleared saved preferences".into()),
+                }
             }
         }
         let current_prefs = self.preferences();
@@ -8508,9 +8749,11 @@ mod selection_set_tests {
         let mesh = CoreMesh::new(
             vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::Y],
             &[[0, 1, 2]],
-        ).unwrap();
+        )
+        .unwrap();
         let uv = UvLayer {
-            name: "UV".into(), corner_uv: vec![0, 1, 2],
+            name: "UV".into(),
+            corner_uv: vec![0, 1, 2],
             uvs: vec![DVec2::ZERO, DVec2::X, DVec2::Y],
         };
         let islands = Islands::compute(&mesh, &uv);
@@ -8527,10 +8770,19 @@ mod selection_set_tests {
     fn group_container_picks_empty_space_and_prefers_smallest_overlap() {
         let bounds = [
             (1, Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0))),
-            (2, Rect::from_min_max(Pos2::new(30.0, 30.0), Pos2::new(70.0, 70.0))),
+            (
+                2,
+                Rect::from_min_max(Pos2::new(30.0, 30.0), Pos2::new(70.0, 70.0)),
+            ),
         ];
-        assert_eq!(pick_group_container(&bounds, Vec2::new(10.0, 10.0)), Some(1));
-        assert_eq!(pick_group_container(&bounds, Vec2::new(50.0, 50.0)), Some(2));
+        assert_eq!(
+            pick_group_container(&bounds, Vec2::new(10.0, 10.0)),
+            Some(1)
+        );
+        assert_eq!(
+            pick_group_container(&bounds, Vec2::new(50.0, 50.0)),
+            Some(2)
+        );
         assert_eq!(pick_group_container(&bounds, Vec2::new(110.0, 50.0)), None);
     }
 

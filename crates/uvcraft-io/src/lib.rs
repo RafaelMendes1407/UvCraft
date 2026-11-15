@@ -253,10 +253,10 @@ pub fn prepare_write_uv_channels(
             let obj = obj::parse(convert::gltf_to_obj(g, mesh, active_layer)?)?;
             let mut all = layers.clone();
             for channel in g.uv_channels() {
-                if let std::collections::btree_map::Entry::Vacant(entry) = all.entry(channel) {
-                    if let Some((_, layer)) = g.activate_uv_channel(mesh, channel)? {
-                        entry.insert(layer);
-                    }
+                if let std::collections::btree_map::Entry::Vacant(entry) = all.entry(channel)
+                    && let Some((_, layer)) = g.activate_uv_channel(mesh, channel)?
+                {
+                    entry.insert(layer);
                 }
             }
             let mut normalized = BTreeMap::new();

@@ -226,7 +226,7 @@ fn parse_container(bytes: &[u8]) -> Result<ParsedContainer, GltfError> {
 pub(crate) fn build_glb(json: &[u8], bin: Option<&[u8]>, extra: &[(u32, Vec<u8>)]) -> Vec<u8> {
     let mut chunks: Vec<(u32, Vec<u8>)> = Vec::new();
     let mut j = json.to_vec();
-    while j.len() % 4 != 0 {
+    while !j.len().is_multiple_of(4) {
         j.push(b' ');
     }
     chunks.push((CHUNK_JSON, j));
@@ -252,6 +252,54 @@ pub(crate) fn build_glb(json: &[u8], bin: Option<&[u8]>, extra: &[(u32, Vec<u8>)
 }
 
 // ---------------------------------------------------------------- URIs
+
+/// Resolves an external buffer URI against the asset's directory. Only
+/// regular files inside that directory are accepted: absolute paths, URI
+/// schemes (`file:`, `http:`, ...), `..` segments, symlinks leading outside
+/// it and device files or FIFOs (`/dev/zero` would never finish reading) are
+/// rejected, so an untrusted asset cannot make the loader read, and a later
+/// `.glb` save embed, an arbitrary file.
+fn external_buffer_path(base_dir: &Path, uri: &str) -> Result<PathBuf, String> {
+    let decoded = percent_decode(uri);
+    let has_scheme = decoded.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.len() > 1
+            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    });
+    let relative = Path::new(&decoded);
+    if has_scheme
+        || decoded.contains('\0')
+        || relative.is_absolute()
+        || relative.has_root()
+        || relative
+            .components()
+            .any(|c| matches!(c, Component::Prefix(_) | Component::ParentDir))
+    {
+        return Err(format!(
+            "unsupported external URI {uri:?} (must be a path inside the asset's folder)"
+        ));
+    }
+    let path = base_dir.join(relative);
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let real = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let root = base_dir
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", base_dir.display()))?;
+    if !real.starts_with(&root) {
+        return Err(format!(
+            "{} leads outside the asset's folder",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
 
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
@@ -675,7 +723,8 @@ fn load_buffers(
                 )
             }
             Some(uri) => {
-                let path = base_dir.join(percent_decode(uri));
+                let path = external_buffer_path(base_dir, uri)
+                    .map_err(|e| invalid(format!("buffer {i}: {e}")))?;
                 let bytes = std::fs::read(&path)
                     .map_err(|e| invalid(format!("buffer {i} ({}): {e}", path.display())))?;
                 (
@@ -701,7 +750,7 @@ fn load_buffers(
 /// ranges before accessor and sparse parsing. The original bytes remain on
 /// `GltfSource` only for source attribution; edited exports use decoded data.
 fn decode_meshopt_color(bytes: &mut [u8], stride: usize) -> Result<(), GltfError> {
-    if !matches!(stride, 4 | 8) || bytes.len() % stride != 0 {
+    if !matches!(stride, 4 | 8) || !bytes.len().is_multiple_of(stride) {
         return Err(invalid("meshopt COLOR requires 4 or 8 byte elements"));
     }
     let max = if stride == 4 { 255_i64 } else { 65535_i64 };
@@ -1022,7 +1071,12 @@ fn decode_draco_primitives(
 
 fn triangles(mode: usize, idx: &[u32]) -> Result<Vec<[u32; 3]>, GltfError> {
     Ok(match mode {
-        4 => idx.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+        4 => idx
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| [t[0], t[1], t[2]])
+            .collect(),
         5 => (0..idx.len().saturating_sub(2))
             .map(|i| {
                 if i % 2 == 0 {
@@ -1043,6 +1097,9 @@ fn triangles(mode: usize, idx: &[u32]) -> Result<Vec<[u32; 3]>, GltfError> {
 pub fn parse(original: Vec<u8>, base_dir: &Path) -> Result<GltfDocument, GltfError> {
     let c = parse_container(&original)?;
     let mut json: Value = serde_json::from_slice(&c.json_chunk)?;
+    if !json.is_object() {
+        return Err(invalid("the glTF JSON root must be an object"));
+    }
     let (mut buffers, mut buffer_sources) = load_buffers(&json, c.kind, c.bin, base_dir)?;
     let decoded_meshopt = decode_meshopt_views(&mut json, &mut buffers)?;
     let decoded_draco = decode_draco_primitives(&mut json, &mut buffers, &mut buffer_sources)?;
@@ -1246,7 +1303,7 @@ impl Appender {
         stride: Option<usize>,
         mut accessor: Value,
     ) -> Result<usize, GltfError> {
-        while (self.base + self.data.len()) % 4 != 0 {
+        while !(self.base + self.data.len()).is_multiple_of(4) {
             self.data.push(0);
         }
         let offset = self.base + self.data.len();
@@ -2307,6 +2364,53 @@ impl GltfSource {
 mod tests {
     use super::*;
 
+    #[test]
+    fn non_object_json_root_is_an_error_not_a_panic() {
+        for text in ["1", "[]", "null", "\"asset\""] {
+            assert!(
+                parse(text.as_bytes().to_vec(), Path::new(".")).is_err(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_buffers_must_be_relative_regular_files() {
+        let dir = std::env::temp_dir().join(format!("uvcraft-gltf-uri-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/data file.bin"), [0u8; 4]).unwrap();
+        assert_eq!(
+            external_buffer_path(&dir, "sub/data%20file.bin").unwrap(),
+            dir.join("sub/data file.bin")
+        );
+        let absolute = dir.join("sub/data file.bin").to_string_lossy().into_owned();
+        for uri in [
+            absolute.as_str(),
+            "/etc/hostname",
+            "file:///etc/hostname",
+            "https://example.com/a.bin",
+            "sub",
+            "missing.bin",
+            "a%00b.bin",
+            "../sibling.bin",
+            "sub/../sub/data%20file.bin",
+            "sub/%2E%2E/%2E%2E/x.bin",
+        ] {
+            assert!(external_buffer_path(&dir, uri).is_err(), "{uri}");
+        }
+        #[cfg(unix)]
+        {
+            assert!(external_buffer_path(&dir, "../../../../../../../../dev/zero").is_err());
+            let outside =
+                std::env::temp_dir().join(format!("uvcraft-gltf-out-{}.bin", std::process::id()));
+            std::fs::write(&outside, [0u8; 4]).unwrap();
+            std::os::unix::fs::symlink(&outside, dir.join("link.bin")).unwrap();
+            assert!(external_buffer_path(&dir, "link.bin").is_err());
+            let _ = std::fs::remove_file(outside);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Temporary directory removed when dropped.
     struct TempDir(PathBuf);
     impl TempDir {
@@ -2391,14 +2495,8 @@ mod tests {
 
     fn meshopt_glb() -> Vec<u8> {
         let (mut json, bin) = quad(true, false);
-        let positions: Vec<[u8; 12]> = bin[..72]
-            .chunks_exact(12)
-            .map(|bytes| bytes.try_into().unwrap())
-            .collect();
-        let texcoords: Vec<[u8; 8]> = bin[72..120]
-            .chunks_exact(8)
-            .map(|bytes| bytes.try_into().unwrap())
-            .collect();
+        let positions: Vec<[u8; 12]> = bin[..72].as_chunks::<12>().0.to_vec();
+        let texcoords: Vec<[u8; 8]> = bin[72..120].as_chunks::<8>().0.to_vec();
         let indices: [u32; 6] = [0, 1, 2, 5, 1, 3];
         let packed = [
             (
@@ -2479,8 +2577,10 @@ mod tests {
         rgba16.extend_from_slice(&0x9234_u16.to_le_bytes());
         decode_meshopt_color(&mut rgba16, 8).unwrap();
         let decoded: Vec<_> = rgba16
-            .chunks_exact(2)
-            .map(|bytes| u16::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
             .collect();
         assert_eq!(decoded, [23000, 18000, 21000, 9320]);
 

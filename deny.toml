@@ -1,0 +1,31 @@
+# Supply-chain policy checked by `cargo deny` (see docs/SECURITY_AUDIT.md).
+[graph]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+# Licenses present in the resolved graph and compatible with distributing
+# UvCraft under MIT OR Apache-2.0. Review THIRD_PARTY_NOTICES before adding one.
+allow = [
+    "0BSD", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
+    "BSD-3-Clause", "BSL-1.0", "ISC", "MIT", "OFL-1.1", "Ubuntu-font-1.0",
+    "Unicode-3.0", "Unlicense", "Zlib",
+    # libfuzzer-sys (fuzz/ graph only; never shipped).
+    "NCSA",
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[bans]
+# The GUI/wgpu graph legitimately contains parallel major versions.
+# Record them for review; a blanket deny would break on unrelated upgrades.
+multiple-versions = "warn"
+# Local uvcraft-* path dependencies appear as '*' in Cargo metadata.
+wildcards = "warn"
+allow-wildcard-paths = true

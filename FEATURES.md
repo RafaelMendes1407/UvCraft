@@ -228,3 +228,18 @@ Complete list of planned UvCraft features, based on the RizomUV feature set (`Ri
 - [x] Length and area measurements — M4 · D1
 - [x] Pack into a physical rectangle (e.g. fabric width) — M4 · D2
 - [x] Flat pattern export for manufacturing (textile, print, packaging) — M4+ · D4 · dimensioned SVG cut contours in physical UV units
+
+## 18. Security and supply chain
+
+- [x] Reproducible local security audit — M2 · D1 · `scripts/security-audit.sh` writes JSON/Markdown evidence; missing tools are `ERROR`, never `PASS`
+- [x] Dependency advisories and policy — M2 · D1 · cargo-audit and cargo-deny (advisories, licenses, sources, bans) on the workspace and fuzz lockfiles
+- [x] Strict static checks — M2 · D1 · `cargo fmt --check`, Clippy `-D warnings` with all features, and every crate must inherit `unsafe_code = "forbid"`
+- [x] Unsafe inventory — M2 · D1 · cargo-geiger over `uvcraft-app` and its dependencies, plus a lexical scan of own sources
+- [x] Secret scanning with reviewed, expiring exceptions — M2 · D1 · Gitleaks over Git history; `.gitleaksignore` must match `security/exceptions.json`
+- [x] CycloneDX SBOM per crate — M2 · D1 · cargo-cyclonedx plus an inventory of native `links` crates
+- [x] Fuzzing of untrusted inputs — M2 · D2 · cargo-fuzz targets for OBJ, glTF/GLB, FBX and command scripts; 10 s smoke runs on schedule/manual dispatch
+- [x] CI security workflow — M2 · D1 · independent jobs, pinned action SHAs, no persisted credentials, consolidated report that treats a missing job as `ERROR`; Dependabot for Cargo and Actions
+- [x] Hardened preference file — M2 · D1 · exclusive 0600 temporary file, refuses to write through a symlink
+- [x] Erasure of persisted data — M2 · D1 · `Preferences::clear`, the Preferences window's "Clear saved data" and `uvcraft-app --clear-preferences`
+- [x] Confined external glTF buffers — M2 · D1 · only regular files inside the asset's folder (no absolute paths, URI schemes, `..`, escaping symlinks or device files)
+- [x] Loopback-only servers — M2 · D1 · `uvcraft serve` and `uvcraft bridge` both reject non-loopback addresses; JSON-RPC requests capped at 64 MiB

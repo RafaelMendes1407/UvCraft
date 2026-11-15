@@ -2,7 +2,9 @@
 //! vertices and picking.
 
 use glam::{DVec2, DVec3, Vec3};
-use uvcraft_algo::analysis::{self, DistortionValues, Report, TriangleMap, distortion_values, triangle_map};
+use uvcraft_algo::analysis::{
+    self, DistortionValues, Report, TriangleMap, distortion_values, triangle_map,
+};
 use uvcraft_core::{EdgeKind, Islands, Mesh, UvLayer};
 
 use crate::render::{LineVertex, TriVertex};
@@ -19,10 +21,21 @@ pub enum ColorMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DistortionMetric { Area, Conformal, Directional, Combined }
+pub enum DistortionMetric {
+    Area,
+    Conformal,
+    Directional,
+    Combined,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DistortionReference { Object, Selected, Island, TexelTarget, Raw }
+pub enum DistortionReference {
+    Object,
+    Selected,
+    Island,
+    TexelTarget,
+    Raw,
+}
 
 #[derive(Debug, Clone)]
 pub struct DistortionConfig {
@@ -38,9 +51,16 @@ pub struct DistortionConfig {
 
 impl Default for DistortionConfig {
     fn default() -> Self {
-        Self { metric: DistortionMetric::Area, reference: DistortionReference::Object,
-            sensitivity: 1.0, selected_islands: Vec::new(), active_island: None,
-            isolate_active: false, texel_target: 512.0, resolution: 1024 }
+        Self {
+            metric: DistortionMetric::Area,
+            reference: DistortionReference::Object,
+            sensitivity: 1.0,
+            selected_islands: Vec::new(),
+            active_island: None,
+            isolate_active: false,
+            texel_target: 512.0,
+            resolution: 1024,
+        }
     }
 }
 
@@ -106,7 +126,8 @@ impl Scene {
             for tri in mesh.fan_triangles(face) {
                 let map = triangle_map(
                     tri.map(|c| measurement_mesh.corner_position(c)),
-                    tri.map(|c| uv.uv_at_corner(c)));
+                    tri.map(|c| uv.uv_at_corner(c)),
+                );
                 if let Some(map) = map {
                     let sum = &mut distortion_sums[islands.island_of_face(face)];
                     sum.0 += map.area_3d;
@@ -164,16 +185,25 @@ pub fn island_color(i: usize) -> [f32; 3] {
 
 fn render_uv(point: DVec2) -> [f32; 2] {
     let value = point.as_vec2();
-    if value.is_finite() { value.to_array() } else { [0.0; 2] }
+    if value.is_finite() {
+        value.to_array()
+    } else {
+        [0.0; 2]
+    }
 }
 
 fn blend(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
 }
 
-fn distortion_color(values: Option<DistortionValues>, metric: DistortionMetric,
-    sensitivity: f64) -> [f32; 3] {
-    let Some(v) = values else { return [0.7, 0.25, 0.85]; };
+fn distortion_color(
+    values: Option<DistortionValues>,
+    metric: DistortionMetric,
+    sensitivity: f64,
+) -> [f32; 3] {
+    let Some(v) = values else {
+        return [0.7, 0.25, 0.85];
+    };
     let green = [0.2, 0.8, 0.35];
     let blue = [0.18, 0.42, 0.95];
     let yellow = [0.95, 0.82, 0.18];
@@ -181,7 +211,9 @@ fn distortion_color(values: Option<DistortionValues>, metric: DistortionMetric,
     let red = [0.95, 0.16, 0.12];
     let sensitivity = if sensitivity.is_finite() {
         sensitivity.clamp(0.01, 100.0)
-    } else { 1.0 };
+    } else {
+        1.0
+    };
     let signed = match metric {
         DistortionMetric::Area => Some(v.area.log2()),
         DistortionMetric::Directional => Some(v.directional_log / std::f64::consts::LN_2),
@@ -189,9 +221,14 @@ fn distortion_color(values: Option<DistortionValues>, metric: DistortionMetric,
     };
     if let Some(value) = signed {
         let t = (value * sensitivity).clamp(-1.0, 1.0) as f32;
-        if t < 0.0 { return blend(green, blue, -t); }
-        return if t < 0.5 { blend(green, yellow, t * 2.0) }
-            else { blend(yellow, red, t * 2.0 - 1.0) };
+        if t < 0.0 {
+            return blend(green, blue, -t);
+        }
+        return if t < 0.5 {
+            blend(green, yellow, t * 2.0)
+        } else {
+            blend(yellow, red, t * 2.0 - 1.0)
+        };
     }
     let magnitude = match metric {
         DistortionMetric::Conformal => v.conformal.log2(),
@@ -199,9 +236,13 @@ fn distortion_color(values: Option<DistortionValues>, metric: DistortionMetric,
         _ => 0.0,
     };
     let t = (magnitude * sensitivity).clamp(0.0, 1.0) as f32;
-    if t < 0.33 { blend(green, yellow, t / 0.33) }
-    else if t < 0.66 { blend(yellow, orange, (t - 0.33) / 0.33) }
-    else { blend(orange, red, (t - 0.66) / 0.34) }
+    if t < 0.33 {
+        blend(green, yellow, t / 0.33)
+    } else if t < 0.66 {
+        blend(yellow, orange, (t - 0.33) / 0.33)
+    } else {
+        blend(orange, red, (t - 0.66) / 0.34)
+    }
 }
 
 fn density_color(density: f64, target: f64) -> [f32; 3] {
@@ -240,25 +281,48 @@ pub fn build_tris_with_colors(
     target_density: f64,
     group_colors: &[Option<[u8; 4]>],
 ) -> Vec<TriVertex> {
-    build_tris_with_distortion(mesh, mesh, uv, scene, TriColorSettings {
-        selected_faces, mode, target_density, group_colors,
-        distortion: &DistortionConfig::default() })
+    build_tris_with_distortion(
+        mesh,
+        mesh,
+        uv,
+        scene,
+        TriColorSettings {
+            selected_faces,
+            mode,
+            target_density,
+            group_colors,
+            distortion: &DistortionConfig::default(),
+        },
+    )
 }
 
 type TriangleMapCache<'a> = (std::borrow::Cow<'a, [Option<TriangleMap>]>, Vec<(f64, f64)>);
 
-fn distortion_maps_for_uv<'a>(measurement_mesh: &Mesh, uv: &UvLayer,
-    scene: &'a Scene) -> TriangleMapCache<'a> {
-    let dirty: Vec<bool> = uv.uvs.iter().enumerate().map(|(i, &point)|
-        scene.base_uvs.get(i).is_none_or(|&base| base != point)).collect();
+fn distortion_maps_for_uv<'a>(
+    measurement_mesh: &Mesh,
+    uv: &UvLayer,
+    scene: &'a Scene,
+) -> TriangleMapCache<'a> {
+    let dirty: Vec<bool> = uv
+        .uvs
+        .iter()
+        .enumerate()
+        .map(|(i, &point)| scene.base_uvs.get(i).is_none_or(|&base| base != point))
+        .collect();
     if !dirty.iter().any(|&changed| changed) && uv.uvs.len() == scene.base_uvs.len() {
-        return (std::borrow::Cow::Borrowed(&scene.distortion_maps), scene.distortion_sums.clone());
+        return (
+            std::borrow::Cow::Borrowed(&scene.distortion_maps),
+            scene.distortion_sums.clone(),
+        );
     }
     let mut maps = scene.distortion_maps.clone();
     let mut sums = scene.distortion_sums.clone();
     for face in 0..measurement_mesh.face_count() {
         for tri in measurement_mesh.fan_triangles(face) {
-            if !tri.iter().any(|&c| dirty.get(uv.corner_uv(c)).copied().unwrap_or(true)) {
+            if !tri
+                .iter()
+                .any(|&c| dirty.get(uv.corner_uv(c)).copied().unwrap_or(true))
+            {
                 continue;
             }
             let slot = tri[1];
@@ -267,8 +331,10 @@ fn distortion_maps_for_uv<'a>(measurement_mesh: &Mesh, uv: &UvLayer,
                 sum.0 -= old.area_3d;
                 sum.1 -= old.uv_area.abs();
             }
-            let updated = triangle_map(tri.map(|c| measurement_mesh.corner_position(c)),
-                tri.map(|c| uv.uv_at_corner(c)));
+            let updated = triangle_map(
+                tri.map(|c| measurement_mesh.corner_position(c)),
+                tri.map(|c| uv.uv_at_corner(c)),
+            );
             if let Some(new) = updated {
                 sum.0 += new.area_3d;
                 sum.1 += new.uv_area.abs();
@@ -284,23 +350,33 @@ fn distortion_reference_scale(sums: &[(f64, f64)], config: &DistortionConfig) ->
         DistortionReference::Raw => 1.0,
         DistortionReference::TexelTarget => {
             let scale = config.texel_target / config.resolution.max(1) as f64;
-            if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
-        },
+            if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            }
+        }
         domain => {
             let ids: Vec<usize> = match domain {
                 DistortionReference::Object => (0..sums.len()).collect(),
-                DistortionReference::Selected if !config.selected_islands.is_empty() =>
-                    config.selected_islands.clone(),
-                DistortionReference::Island => config.active_island
+                DistortionReference::Selected if !config.selected_islands.is_empty() => {
+                    config.selected_islands.clone()
+                }
+                DistortionReference::Island => config
+                    .active_island
                     .or_else(|| config.selected_islands.first().copied())
                     .map_or_else(|| (0..sums.len()).collect(), |i| vec![i]),
                 _ => (0..sums.len()).collect(),
             };
-            let (surface, texture) = ids.iter().filter_map(|&i| sums.get(i))
+            let (surface, texture) = ids
+                .iter()
+                .filter_map(|&i| sums.get(i))
                 .fold((0.0, 0.0), |(a, b), &(x, y)| (a + x, b + y));
             if surface > 0.0 && texture > 0.0 {
                 (texture / surface).sqrt()
-            } else { 1.0 }
+            } else {
+                1.0
+            }
         }
     }
 }
@@ -320,14 +396,26 @@ pub fn build_tris_with_distortion(
     scene: &Scene,
     settings: TriColorSettings<'_>,
 ) -> Vec<TriVertex> {
-    let TriColorSettings { selected_faces, mode, target_density,
-        group_colors, distortion } = settings;
+    let TriColorSettings {
+        selected_faces,
+        mode,
+        target_density,
+        group_colors,
+        distortion,
+    } = settings;
     let (maps, sums) = if mode == ColorMode::Distortion {
         distortion_maps_for_uv(measurement_mesh, uv, scene)
-    } else { (std::borrow::Cow::Borrowed(scene.distortion_maps.as_slice()), Vec::new()) };
+    } else {
+        (
+            std::borrow::Cow::Borrowed(scene.distortion_maps.as_slice()),
+            Vec::new(),
+        )
+    };
     let reference_scale = if mode == ColorMode::Distortion {
         distortion_reference_scale(&sums, distortion)
-    } else { 1.0 };
+    } else {
+        1.0
+    };
     let mut out = Vec::with_capacity(scene.tris.len() * 3);
     for &(f, t) in &scene.tris {
         let f = f as usize;
@@ -357,8 +445,11 @@ pub fn build_tris_with_distortion(
                 if map.is_some_and(|m| (m.uv_area < 0.0) != scene.report.islands[island].flipped) {
                     [0.85, 0.2, 0.75]
                 } else {
-                    distortion_color(map.and_then(|m| distortion_values(m, reference_scale)),
-                        distortion.metric, distortion.sensitivity)
+                    distortion_color(
+                        map.and_then(|m| distortion_values(m, reference_scale)),
+                        distortion.metric,
+                        distortion.sensitivity,
+                    )
                 }
             }
             ColorMode::Flipped => {
@@ -391,9 +482,12 @@ pub fn build_tris_with_distortion(
                 target_density,
             ),
         };
-        let a = if mode == ColorMode::Distortion && distortion.isolate_active
-            && distortion.active_island.is_some_and(|active|
-                scene.islands.island_of_face(f) != active) {
+        let a = if mode == ColorMode::Distortion
+            && distortion.isolate_active
+            && distortion
+                .active_island
+                .is_some_and(|active| scene.islands.island_of_face(f) != active)
+        {
             -1.0
         } else if selected_faces.get(f).copied().unwrap_or(false) {
             1.0
@@ -774,39 +868,85 @@ mod tests {
 
     #[test]
     fn distortion_mode_distinguishes_uniform_expansion_and_compression() {
-        let positions = vec![DVec3::ZERO, DVec3::X, DVec3::Y,
-            DVec3::new(3.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0), DVec3::new(3.0, 1.0, 0.0)];
+        let positions = vec![
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::Y,
+            DVec3::new(3.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(3.0, 1.0, 0.0),
+        ];
         let faces = [[0u32, 1, 2], [3, 4, 5]];
         let mesh = Mesh::new(positions, &faces).unwrap();
-        let uv = UvLayer { name: "uv".into(),
+        let uv = UvLayer {
+            name: "uv".into(),
             corner_uv: (0..6).collect(),
-            uvs: vec![DVec2::ZERO, DVec2::X * 2.0, DVec2::Y * 2.0,
-                DVec2::new(3.0, 0.0), DVec2::new(3.5, 0.0), DVec2::new(3.0, 0.5)] };
+            uvs: vec![
+                DVec2::ZERO,
+                DVec2::X * 2.0,
+                DVec2::Y * 2.0,
+                DVec2::new(3.0, 0.0),
+                DVec2::new(3.5, 0.0),
+                DVec2::new(3.0, 0.5),
+            ],
+        };
         let scene = Scene::new(&mesh, &uv, 1024);
         let colors = build_tris(&mesh, &uv, &scene, &[], ColorMode::Distortion, 512.0);
-        assert_ne!(colors[0].color[..3], colors[3].color[..3],
-            "shared-reference heatmap must distinguish UV expansion from compression");
+        assert_ne!(
+            colors[0].color[..3],
+            colors[3].color[..3],
+            "shared-reference heatmap must distinguish UV expansion from compression"
+        );
     }
 
     #[test]
     fn distortion_modes_detect_area_preserving_anisotropy() {
-        let positions = vec![DVec3::ZERO, DVec3::X, DVec3::Y,
-            DVec3::new(3.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0), DVec3::new(3.0, 1.0, 0.0)];
+        let positions = vec![
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::Y,
+            DVec3::new(3.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(3.0, 1.0, 0.0),
+        ];
         let faces = [[0u32, 1, 2], [3, 4, 5]];
         let mesh = Mesh::new(positions, &faces).unwrap();
-        let uv = UvLayer { name: "uv".into(), corner_uv: (0..6).collect(),
-            uvs: vec![DVec2::ZERO, DVec2::X * 2.0, DVec2::Y * 0.5,
-                DVec2::new(3.0, 0.0), DVec2::new(4.0, 0.0), DVec2::new(3.0, 1.0)] };
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..6).collect(),
+            uvs: vec![
+                DVec2::ZERO,
+                DVec2::X * 2.0,
+                DVec2::Y * 0.5,
+                DVec2::new(3.0, 0.0),
+                DVec2::new(4.0, 0.0),
+                DVec2::new(3.0, 1.0),
+            ],
+        };
         let scene = Scene::new(&mesh, &uv, 1024);
         let mut config = DistortionConfig::default();
-        let colors = |config: &DistortionConfig| build_tris_with_distortion(
-            &mesh, &mesh, &uv, &scene, TriColorSettings { selected_faces: &[],
-                mode: ColorMode::Distortion, target_density: 512.0,
-                group_colors: &[], distortion: config });
+        let colors = |config: &DistortionConfig| {
+            build_tris_with_distortion(
+                &mesh,
+                &mesh,
+                &uv,
+                &scene,
+                TriColorSettings {
+                    selected_faces: &[],
+                    mode: ColorMode::Distortion,
+                    target_density: 512.0,
+                    group_colors: &[],
+                    distortion: config,
+                },
+            )
+        };
         let area = colors(&config);
         assert_eq!(area[0].color[..3], area[3].color[..3]);
-        for metric in [DistortionMetric::Conformal, DistortionMetric::Directional,
-            DistortionMetric::Combined] {
+        for metric in [
+            DistortionMetric::Conformal,
+            DistortionMetric::Directional,
+            DistortionMetric::Combined,
+        ] {
             config.metric = metric;
             let result = colors(&config);
             assert_ne!(result[0].color[..3], result[3].color[..3], "{metric:?}");
@@ -815,19 +955,45 @@ mod tests {
 
     #[test]
     fn individual_reference_normalizes_uniform_scale_but_object_reference_compares_islands() {
-        let positions = vec![DVec3::ZERO, DVec3::X, DVec3::Y,
-            DVec3::new(3.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0), DVec3::new(3.0, 1.0, 0.0)];
+        let positions = vec![
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::Y,
+            DVec3::new(3.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(3.0, 1.0, 0.0),
+        ];
         let faces = [[0u32, 1, 2], [3, 4, 5]];
         let mesh = Mesh::new(positions, &faces).unwrap();
-        let uv = UvLayer { name: "uv".into(), corner_uv: (0..6).collect(),
-            uvs: vec![DVec2::ZERO, DVec2::X * 2.0, DVec2::Y * 2.0,
-                DVec2::new(3.0, 0.0), DVec2::new(3.5, 0.0), DVec2::new(3.0, 0.5)] };
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..6).collect(),
+            uvs: vec![
+                DVec2::ZERO,
+                DVec2::X * 2.0,
+                DVec2::Y * 2.0,
+                DVec2::new(3.0, 0.0),
+                DVec2::new(3.5, 0.0),
+                DVec2::new(3.0, 0.5),
+            ],
+        };
         let scene = Scene::new(&mesh, &uv, 1024);
         let mut config = DistortionConfig::default();
-        let colors = |config: &DistortionConfig| build_tris_with_distortion(
-            &mesh, &mesh, &uv, &scene, TriColorSettings { selected_faces: &[],
-                mode: ColorMode::Distortion, target_density: 512.0,
-                group_colors: &[], distortion: config });
+        let colors = |config: &DistortionConfig| {
+            build_tris_with_distortion(
+                &mesh,
+                &mesh,
+                &uv,
+                &scene,
+                TriColorSettings {
+                    selected_faces: &[],
+                    mode: ColorMode::Distortion,
+                    target_density: 512.0,
+                    group_colors: &[],
+                    distortion: config,
+                },
+            )
+        };
         assert_ne!(colors(&config)[0].color[..3], colors(&config)[3].color[..3]);
         config.reference = DistortionReference::Island;
         config.active_island = Some(0);
@@ -837,8 +1003,10 @@ mod tests {
         assert_eq!(colors(&config)[0].color[..3], [0.2, 0.8, 0.35]);
         assert_ne!(colors(&config)[3].color[..3], [0.2, 0.8, 0.35]);
         config.selected_islands = vec![0, 1];
-        assert_eq!(colors(&config)[0].color[..3],
-            build_tris(&mesh, &uv, &scene, &[], ColorMode::Distortion, 512.0)[0].color[..3]);
+        assert_eq!(
+            colors(&config)[0].color[..3],
+            build_tris(&mesh, &uv, &scene, &[], ColorMode::Distortion, 512.0)[0].color[..3]
+        );
         config.reference = DistortionReference::TexelTarget;
         config.texel_target = 2048.0;
         config.resolution = 1024;
@@ -849,16 +1017,32 @@ mod tests {
 
     #[test]
     fn interactive_uv_change_recomputes_only_affected_jacobian() {
-        let mesh = Mesh::new(vec![DVec3::ZERO, DVec3::X, DVec3::Y],
-            &[[0u32, 1, 2]]).unwrap();
-        let uv = UvLayer { name: "uv".into(), corner_uv: vec![0, 1, 2],
-            uvs: vec![DVec2::ZERO, DVec2::X, DVec2::Y] };
+        let mesh = Mesh::new(vec![DVec3::ZERO, DVec3::X, DVec3::Y], &[[0u32, 1, 2]]).unwrap();
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: vec![0, 1, 2],
+            uvs: vec![DVec2::ZERO, DVec2::X, DVec2::Y],
+        };
         let scene = Scene::new(&mesh, &uv, 1024);
-        let config = DistortionConfig { reference: DistortionReference::Raw,
-            ..Default::default() };
-        let draw = |layer: &UvLayer| build_tris_with_distortion(&mesh, &mesh, layer,
-            &scene, TriColorSettings { selected_faces: &[], mode: ColorMode::Distortion,
-                target_density: 512.0, group_colors: &[], distortion: &config });
+        let config = DistortionConfig {
+            reference: DistortionReference::Raw,
+            ..Default::default()
+        };
+        let draw = |layer: &UvLayer| {
+            build_tris_with_distortion(
+                &mesh,
+                &mesh,
+                layer,
+                &scene,
+                TriColorSettings {
+                    selected_faces: &[],
+                    mode: ColorMode::Distortion,
+                    target_density: 512.0,
+                    group_colors: &[],
+                    distortion: &config,
+                },
+            )
+        };
         assert_eq!(draw(&uv)[0].color[..3], [0.2, 0.8, 0.35]);
         let mut preview = uv.clone();
         preview.uvs[1] *= 2.0;
@@ -871,16 +1055,31 @@ mod tests {
     fn measurement_mesh_drives_the_same_triangle_colors_in_both_views() {
         let faces = [[0u32, 1, 2]];
         let mesh = Mesh::new(vec![DVec3::ZERO, DVec3::X, DVec3::Y], &faces).unwrap();
-        let measured = Mesh::new(vec![DVec3::ZERO, DVec3::X * 2.0, DVec3::Y * 2.0],
-            &faces).unwrap();
-        let uv = UvLayer { name: "uv".into(), corner_uv: vec![0, 1, 2],
-            uvs: vec![DVec2::ZERO, DVec2::X, DVec2::Y] };
+        let measured =
+            Mesh::new(vec![DVec3::ZERO, DVec3::X * 2.0, DVec3::Y * 2.0], &faces).unwrap();
+        let uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: vec![0, 1, 2],
+            uvs: vec![DVec2::ZERO, DVec2::X, DVec2::Y],
+        };
         let scene = Scene::new_with_measurements(&mesh, &measured, &uv, 1024);
-        let config = DistortionConfig { reference: DistortionReference::Raw,
-            ..Default::default() };
-        let colors = build_tris_with_distortion(&mesh, &measured, &uv, &scene,
-            TriColorSettings { selected_faces: &[], mode: ColorMode::Distortion,
-                target_density: 512.0, group_colors: &[], distortion: &config });
+        let config = DistortionConfig {
+            reference: DistortionReference::Raw,
+            ..Default::default()
+        };
+        let colors = build_tris_with_distortion(
+            &mesh,
+            &measured,
+            &uv,
+            &scene,
+            TriColorSettings {
+                selected_faces: &[],
+                mode: ColorMode::Distortion,
+                target_density: 512.0,
+                group_colors: &[],
+                distortion: &config,
+            },
+        );
         assert_eq!(colors.len(), 3);
         for (actual, expected) in colors[0].color[..3].iter().zip([0.18, 0.42, 0.95]) {
             assert!((actual - expected).abs() < 1e-6);
@@ -891,90 +1090,175 @@ mod tests {
     #[test]
     fn intentional_overlap_keeps_each_face_measurement_and_invalids_are_visible() {
         let faces = [[0u32, 1, 2], [3, 4, 5]];
-        let mesh = Mesh::new(vec![DVec3::ZERO, DVec3::X, DVec3::Y,
-            DVec3::new(0.0, 0.0, 2.0), DVec3::new(2.0, 0.0, 2.0),
-            DVec3::new(0.0, 2.0, 2.0)], &faces).unwrap();
-        let mut uv = UvLayer { name: "uv".into(), corner_uv: (0..6).collect(),
-            uvs: vec![DVec2::ZERO, DVec2::X, DVec2::Y,
-                DVec2::ZERO, DVec2::X, DVec2::Y] };
-        let config = DistortionConfig { reference: DistortionReference::Raw,
-            ..Default::default() };
+        let mesh = Mesh::new(
+            vec![
+                DVec3::ZERO,
+                DVec3::X,
+                DVec3::Y,
+                DVec3::new(0.0, 0.0, 2.0),
+                DVec3::new(2.0, 0.0, 2.0),
+                DVec3::new(0.0, 2.0, 2.0),
+            ],
+            &faces,
+        )
+        .unwrap();
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..6).collect(),
+            uvs: vec![
+                DVec2::ZERO,
+                DVec2::X,
+                DVec2::Y,
+                DVec2::ZERO,
+                DVec2::X,
+                DVec2::Y,
+            ],
+        };
+        let config = DistortionConfig {
+            reference: DistortionReference::Raw,
+            ..Default::default()
+        };
         let draw = |uv: &UvLayer| {
-            let scene = Scene::new_with_measurements_and_stacks(&mesh, &mesh, uv,
-                1024, &[vec![0, 1]]);
-            build_tris_with_distortion(&mesh, &mesh, uv, &scene,
-                TriColorSettings { selected_faces: &[], mode: ColorMode::Distortion,
-                    target_density: 512.0, group_colors: &[], distortion: &config })
+            let scene =
+                Scene::new_with_measurements_and_stacks(&mesh, &mesh, uv, 1024, &[vec![0, 1]]);
+            build_tris_with_distortion(
+                &mesh,
+                &mesh,
+                uv,
+                &scene,
+                TriColorSettings {
+                    selected_faces: &[],
+                    mode: ColorMode::Distortion,
+                    target_density: 512.0,
+                    group_colors: &[],
+                    distortion: &config,
+                },
+            )
         };
         let colors = draw(&uv);
         assert_ne!(colors[0].color[..3], colors[3].color[..3]);
         uv.uvs[4] = DVec2::ZERO;
         assert_eq!(draw(&uv)[3].color[..3], [0.7, 0.25, 0.85]);
         uv.uvs[4] = -DVec2::X;
-        let mirrored = Scene::new_with_measurements_and_stacks(&mesh, &mesh, &uv,
-            1024, &[vec![0, 1]]);
+        let mirrored =
+            Scene::new_with_measurements_and_stacks(&mesh, &mesh, &uv, 1024, &[vec![0, 1]]);
         assert_eq!(mirrored.report.flipped_islands, 1);
         assert_ne!(draw(&uv)[3].color[..3], [0.7, 0.25, 0.85]);
         uv.uvs[4] = DVec2::new(f64::NAN, 0.0);
         let invalid = draw(&uv);
         assert_eq!(invalid[3].color[..3], [0.7, 0.25, 0.85]);
-        assert!(invalid.iter().all(|v| v.uv.iter().all(|x| x.is_finite())
-            && v.color.iter().all(|x| x.is_finite())));
+        assert!(
+            invalid.iter().all(
+                |v| v.uv.iter().all(|x| x.is_finite()) && v.color.iter().all(|x| x.is_finite())
+            )
+        );
     }
 
     #[test]
     fn heatmap_refreshes_after_relax_and_straighten() {
-        let positions: Vec<DVec3> = (0..3).flat_map(|y| (0..3)
-            .map(move |x| DVec3::new(x as f64, y as f64, 0.0))).collect();
-        let faces = [[0u32, 1, 4, 3], [1, 2, 5, 4],
-            [3, 4, 7, 6], [4, 5, 8, 7]];
+        let positions: Vec<DVec3> = (0..3)
+            .flat_map(|y| (0..3).map(move |x| DVec3::new(x as f64, y as f64, 0.0)))
+            .collect();
+        let faces = [[0u32, 1, 4, 3], [1, 2, 5, 4], [3, 4, 7, 6], [4, 5, 8, 7]];
         let mesh = Mesh::new(positions.clone(), &faces).unwrap();
-        let mut uv = UvLayer { name: "uv".into(),
+        let mut uv = UvLayer {
+            name: "uv".into(),
             corner_uv: faces.iter().flatten().copied().collect(),
-            uvs: positions.iter().map(|p| p.truncate()).collect() };
+            uvs: positions.iter().map(|p| p.truncate()).collect(),
+        };
         uv.uvs[4] += DVec2::new(0.35, -0.2);
         let islands = Islands::compute(&mesh, &uv);
-        let config = DistortionConfig { metric: DistortionMetric::Combined,
-            reference: DistortionReference::Raw, ..Default::default() };
+        let config = DistortionConfig {
+            metric: DistortionMetric::Combined,
+            reference: DistortionReference::Raw,
+            ..Default::default()
+        };
         let draw = |uv: &UvLayer| {
             let scene = Scene::new(&mesh, uv, 1024);
-            build_tris_with_distortion(&mesh, &mesh, uv, &scene,
-                TriColorSettings { selected_faces: &[], mode: ColorMode::Distortion,
-                    target_density: 512.0, group_colors: &[], distortion: &config })
-                .iter().map(|v| v.color).collect::<Vec<_>>()
+            build_tris_with_distortion(
+                &mesh,
+                &mesh,
+                uv,
+                &scene,
+                TriColorSettings {
+                    selected_faces: &[],
+                    mode: ColorMode::Distortion,
+                    target_density: 512.0,
+                    group_colors: &[],
+                    distortion: &config,
+                },
+            )
+            .iter()
+            .map(|v| v.color)
+            .collect::<Vec<_>>()
         };
         let before = draw(&uv);
         let mut pins = vec![true; 9];
         pins[4] = false;
-        let result = uvcraft_algo::slim::optimize_slim(&mesh, &mut uv, &islands,
-            &[0], &pins, 20);
+        let result = uvcraft_algo::slim::optimize_slim(&mesh, &mut uv, &islands, &[0], &pins, 20);
         assert_eq!(result.optimized, 1);
         assert_ne!(draw(&uv), before, "Relax must refresh distortion colors");
 
-        let angles = [0.0_f64, std::f64::consts::FRAC_PI_6,
-            std::f64::consts::FRAC_PI_2];
-        let positions: Vec<DVec3> = angles.iter().flat_map(|&angle| [1.0, 2.0]
-            .map(move |radius| DVec3::new(radius * angle.cos(), radius * angle.sin(), 0.0)))
+        let angles = [
+            0.0_f64,
+            std::f64::consts::FRAC_PI_6,
+            std::f64::consts::FRAC_PI_2,
+        ];
+        let positions: Vec<DVec3> = angles
+            .iter()
+            .flat_map(|&angle| {
+                [1.0, 2.0]
+                    .map(move |radius| DVec3::new(radius * angle.cos(), radius * angle.sin(), 0.0))
+            })
             .collect();
         let mesh = Mesh::new(positions.clone(), &[[0u32, 2, 3, 1], [2, 4, 5, 3]]).unwrap();
-        let mut uv = UvLayer { name: "uv".into(),
-            corner_uv: (0..mesh.corner_count()).map(|c| mesh.corner_vertex(c) as u32).collect(),
-            uvs: positions.iter().map(|p| p.truncate() * 0.25).collect() };
+        let mut uv = UvLayer {
+            name: "uv".into(),
+            corner_uv: (0..mesh.corner_count())
+                .map(|c| mesh.corner_vertex(c) as u32)
+                .collect(),
+            uvs: positions.iter().map(|p| p.truncate() * 0.25).collect(),
+        };
         let islands = Islands::compute(&mesh, &uv);
-        let straight_config = DistortionConfig { metric: DistortionMetric::Conformal,
-            sensitivity: 0.5, ..Default::default() };
+        let straight_config = DistortionConfig {
+            metric: DistortionMetric::Conformal,
+            sensitivity: 0.5,
+            ..Default::default()
+        };
         let before_scene = Scene::new(&mesh, &uv, 1024);
-        let before = build_tris_with_distortion(&mesh, &mesh, &uv, &before_scene,
-            TriColorSettings { selected_faces: &[], mode: ColorMode::Distortion,
-                target_density: 512.0, group_colors: &[], distortion: &straight_config });
+        let before = build_tris_with_distortion(
+            &mesh,
+            &mesh,
+            &uv,
+            &before_scene,
+            TriColorSettings {
+                selected_faces: &[],
+                mode: ColorMode::Distortion,
+                target_density: 512.0,
+                group_colors: &[],
+                distortion: &straight_config,
+            },
+        );
         uvcraft_algo::grid::straighten_island(&mesh, &mut uv, &islands, 0, &[]).unwrap();
         let after_scene = Scene::new(&mesh, &uv, 1024);
-        let after = build_tris_with_distortion(&mesh, &mesh, &uv, &after_scene,
-            TriColorSettings { selected_faces: &[], mode: ColorMode::Distortion,
-                target_density: 512.0, group_colors: &[], distortion: &straight_config });
-        assert_ne!(before.iter().map(|v| v.color).collect::<Vec<_>>(),
+        let after = build_tris_with_distortion(
+            &mesh,
+            &mesh,
+            &uv,
+            &after_scene,
+            TriColorSettings {
+                selected_faces: &[],
+                mode: ColorMode::Distortion,
+                target_density: 512.0,
+                group_colors: &[],
+                distortion: &straight_config,
+            },
+        );
+        assert_ne!(
+            before.iter().map(|v| v.color).collect::<Vec<_>>(),
             after.iter().map(|v| v.color).collect::<Vec<_>>(),
-            "Straighten must refresh distortion colors");
+            "Straighten must refresh distortion colors"
+        );
     }
 
     #[test]

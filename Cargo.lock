@@ -3592,7 +3592,7 @@ checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 
 [[package]]
 name = "uvcraft-algo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "faer",
@@ -3608,7 +3608,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -3627,7 +3627,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-bridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",
@@ -3637,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "serde_json",
@@ -3649,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-commands"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "serde",
@@ -3662,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "thiserror 2.0.21",
@@ -3670,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "awsm-renderer-codec-meshopt",
  "base64",
@@ -3685,7 +3685,7 @@ dependencies = [
 
 [[package]]
 name = "uvcraft-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "serde",

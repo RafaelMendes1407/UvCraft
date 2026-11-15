@@ -400,7 +400,7 @@ pub fn edge_loop(mesh: &Mesh, e: usize) -> Vec<usize> {
 fn ring_opposite(mesh: &Mesh, c: usize) -> Option<usize> {
     let face = mesh.face_corners(mesh.corner_face(c));
     let n = face.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         let mut o = c;
         for _ in 0..n / 2 {
             o = mesh.next(o);

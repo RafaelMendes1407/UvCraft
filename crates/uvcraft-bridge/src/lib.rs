@@ -173,14 +173,16 @@ fn random_hex() -> Result<String, String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn loopback_addr(bind: &str) -> Result<SocketAddr, String> {
+/// Resolves `bind` to a loopback socket address; any other interface is
+/// rejected. Shared by the bridge and the JSON-RPC server.
+pub fn loopback_addr(bind: &str) -> Result<SocketAddr, String> {
     let address = bind
         .to_socket_addrs()
         .map_err(|error| error.to_string())?
         .find(|address| address.ip().is_loopback())
-        .ok_or_else(|| "bridge address must resolve to a loopback interface".to_owned())?;
+        .ok_or_else(|| format!("{bind}: address must resolve to a loopback interface"))?;
     if !matches!(address.ip(), IpAddr::V4(_) | IpAddr::V6(_)) {
-        return Err("invalid bridge address".into());
+        return Err(format!("{bind}: invalid address"));
     }
     Ok(address)
 }
@@ -455,11 +457,11 @@ fn load_obj(
             return Err(error);
         }
     };
-    if !edges.is_empty() {
-        if let Err(error) = session.execute(Command::Cut { edges }) {
-            let _ = std::fs::remove_file(&path);
-            return Err(error.to_string());
-        }
+    if !edges.is_empty()
+        && let Err(error) = session.execute(Command::Cut { edges })
+    {
+        let _ = std::fs::remove_file(&path);
+        return Err(error.to_string());
     }
     Ok(RemoteSession {
         session,

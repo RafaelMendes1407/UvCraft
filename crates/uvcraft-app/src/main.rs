@@ -1,9 +1,10 @@
 //! UvCraft desktop app.
 //!
-//! Usage: `uvcraft-app [MESH] [--run SCRIPT] [--screenshot OUT.png]`
+//! Usage: `uvcraft-app [MESH] [--run SCRIPT] [--screenshot OUT.png] [--clear-preferences]`
 //! - `MESH`: .obj, .gltf or .glb to open at startup
 //! - `--run`: command script (same format as `uvcraft run`) applied after loading
 //! - `--screenshot`: save a PNG of the window after a few frames, then quit
+//! - `--clear-preferences`: delete the saved preferences file, then quit
 
 mod app;
 mod blender_addon;
@@ -43,8 +44,26 @@ fn main() -> ExitCode {
         match a.as_str() {
             "--run" => startup.script = args.next().map(PathBuf::from),
             "--screenshot" => startup.screenshot = args.next().map(PathBuf::from),
+            "--clear-preferences" => {
+                let Some(path) = preferences::Preferences::path() else {
+                    eprintln!("error: no configuration directory (HOME/XDG_CONFIG_HOME unset)");
+                    return ExitCode::FAILURE;
+                };
+                return match preferences::Preferences::clear(&path) {
+                    Ok(()) => {
+                        println!("cleared {}", path.display());
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("error: {}: {e}", path.display());
+                        ExitCode::FAILURE
+                    }
+                };
+            }
             "-h" | "--help" => {
-                println!("usage: uvcraft-app [MESH] [--run SCRIPT] [--screenshot OUT.png]");
+                println!(
+                    "usage: uvcraft-app [MESH] [--run SCRIPT] [--screenshot OUT.png] [--clear-preferences]"
+                );
                 return ExitCode::SUCCESS;
             }
             _ if a.starts_with('-') => {

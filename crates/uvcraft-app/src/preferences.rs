@@ -406,9 +406,34 @@ impl Preferences {
             std::fs::create_dir_all(dir)?;
         }
         let bytes = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
-        let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, bytes)?;
-        std::fs::rename(temp, path)
+        write_atomic(path, &bytes)
+    }
+
+    /// Deletes the persisted preferences (which name recently used mesh and
+    /// texture paths) and any temporary file left by an interrupted save.
+    /// An absent file is already cleared.
+    pub fn clear(path: &Path) -> std::io::Result<()> {
+        let mut targets = vec![path.to_path_buf()];
+        if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+            let prefix = format!(".{}.", name.to_string_lossy());
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let file = entry.file_name().to_string_lossy().into_owned();
+                    if file.starts_with(&prefix) && file.ends_with(".tmp") {
+                        targets.push(entry.path());
+                    }
+                }
+            }
+        }
+        // Legacy fixed temporary name used by older versions.
+        targets.push(path.with_extension("json.tmp"));
+        for target in targets {
+            match std::fs::remove_file(target) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                result => result?,
+            }
+        }
+        Ok(())
     }
 
     fn valid(&self) -> bool {
@@ -432,6 +457,51 @@ impl Preferences {
             && (4.0..=128.0).contains(&self.brush_radius)
             && self.layout_presets.values().all(WindowLayout::valid)
     }
+}
+
+/// Writes `bytes` to `path` through an exclusively created sibling temporary
+/// file (never a predictable, pre-existing one) and refuses to replace a
+/// symbolic link, so a planted link cannot redirect the write elsewhere.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to overwrite symbolic link {}", path.display()),
+        ));
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?
+        .to_string_lossy()
+        .into_owned();
+    let mut attempt = 0u32;
+    let (temp, mut file) = loop {
+        let candidate =
+            path.with_file_name(format!(".{name}.{}-{attempt}.tmp", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        match options.open(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 64 => {
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    let result = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            drop(file);
+            std::fs::rename(&temp, path)
+        });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -492,6 +562,71 @@ mod tests {
         std::fs::write(&path, r#"{"checker_cells":0}"#).unwrap();
         assert!(Preferences::load(&path).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "uvcraft-prefs-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn clear_erases_preferences_and_stale_temporaries() {
+        let dir = scratch_dir("clear");
+        let path = dir.join("preferences.json");
+        let mut prefs = Preferences::default();
+        prefs
+            .selection_sets
+            .insert("/private/mesh.glb".into(), Vec::new());
+        prefs.save(&path).unwrap();
+        let stale = dir.join(".preferences.json.999-0.tmp");
+        std::fs::write(&stale, b"{}").unwrap();
+        std::fs::write(dir.join("preferences.json.tmp"), b"{}").unwrap();
+        std::fs::write(dir.join("unrelated.txt"), b"keep").unwrap();
+        Preferences::clear(&path).unwrap();
+        let mut left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["unrelated.txt"]);
+        // Clearing again is a no-op.
+        Preferences::clear(&path).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_leaves_no_temporary_and_keeps_old_file_on_invalid_values() {
+        let dir = scratch_dir("atomic");
+        let path = dir.join("preferences.json");
+        Preferences::default().save(&path).unwrap();
+        let bad = Preferences {
+            checker_cells: 0.0,
+            ..Preferences::default()
+        };
+        assert!(bad.save(&path).is_err());
+        assert_eq!(Preferences::load(&path).unwrap(), Preferences::default());
+        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_refuses_to_follow_a_symlink() {
+        let dir = scratch_dir("symlink");
+        let target = dir.join("victim.txt");
+        std::fs::write(&target, b"original").unwrap();
+        let path = dir.join("preferences.json");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(Preferences::default().save(&path).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
