@@ -253,6 +253,41 @@ pub(crate) fn build_glb(json: &[u8], bin: Option<&[u8]>, extra: &[(u32, Vec<u8>)
 
 // ---------------------------------------------------------------- URIs
 
+/// Resolves an external buffer URI against the asset's directory. Only
+/// relative references to regular files are accepted: absolute paths, URI
+/// schemes (`file:`, `http:`, ...) and device files or FIFOs (`/dev/zero`
+/// would never finish reading) are rejected, so an untrusted asset cannot
+/// make the loader read, and a later `.glb` save embed, an arbitrary file.
+fn external_buffer_path(base_dir: &Path, uri: &str) -> Result<PathBuf, String> {
+    let decoded = percent_decode(uri);
+    let has_scheme = decoded.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.len() > 1
+            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    });
+    let relative = Path::new(&decoded);
+    if has_scheme
+        || decoded.contains('\0')
+        || relative.is_absolute()
+        || relative.has_root()
+        || relative
+            .components()
+            .any(|c| matches!(c, std::path::Component::Prefix(_)))
+    {
+        return Err(format!(
+            "unsupported external URI {uri:?} (must be a relative path)"
+        ));
+    }
+    let path = base_dir.join(relative);
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    Ok(path)
+}
+
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -675,7 +710,8 @@ fn load_buffers(
                 )
             }
             Some(uri) => {
-                let path = base_dir.join(percent_decode(uri));
+                let path = external_buffer_path(base_dir, uri)
+                    .map_err(|e| invalid(format!("buffer {i}: {e}")))?;
                 let bytes = std::fs::read(&path)
                     .map_err(|e| invalid(format!("buffer {i} ({}): {e}", path.display())))?;
                 (
@@ -2311,6 +2347,32 @@ impl GltfSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_buffers_must_be_relative_regular_files() {
+        let dir = std::env::temp_dir().join(format!("uvcraft-gltf-uri-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/data file.bin"), [0u8; 4]).unwrap();
+        assert_eq!(
+            external_buffer_path(&dir, "sub/data%20file.bin").unwrap(),
+            dir.join("sub/data file.bin")
+        );
+        let absolute = dir.join("sub/data file.bin").to_string_lossy().into_owned();
+        for uri in [
+            absolute.as_str(),
+            "/etc/hostname",
+            "file:///etc/hostname",
+            "https://example.com/a.bin",
+            "sub",
+            "missing.bin",
+            "a%00b.bin",
+        ] {
+            assert!(external_buffer_path(&dir, uri).is_err(), "{uri}");
+        }
+        #[cfg(unix)]
+        assert!(external_buffer_path(&dir, "../../../../../../../../dev/zero").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// Temporary directory removed when dropped.
     struct TempDir(PathBuf);
