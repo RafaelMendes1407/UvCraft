@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 base64.workspace = true
-awsm-renderer-codec-meshopt = "=0.38.0"
+awsm-renderer-codec-meshopt = "=0.39.1"
 draco-oxide-core = "=0.1.0-alpha.12"
 draco-oxide-decoder = "=0.1.0-alpha.12"
 flate2 = "1.1"

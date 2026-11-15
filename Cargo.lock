@@ -210,9 +210,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awsm-renderer-codec-meshopt"
-version = "0.38.0"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c7cb94b94e9fd7cb3d5484c6f56b847f7189e61e67085490268e98d29f1b480"
+checksum = "6d805f030be35cbf2d90b1082403b6a3a91612c65dcf604ebd13657b6d7201b6"
 dependencies = [
  "meshopt",
  "thiserror 2.0.21",
@@ -767,7 +767,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "pollster 1.0.1",
+ "pollster",
  "profiling",
  "raw-window-handle",
  "send_wrapper",
@@ -1337,11 +1337,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -1351,8 +1349,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2600,12 +2600,6 @@ dependencies = [
 
 [[package]]
 name = "pollster"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
-
-[[package]]
-name = "pollster"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
@@ -2962,7 +2956,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-uniform-type-identifiers 0.3.2",
  "percent-encoding",
- "pollster 1.0.1",
+ "pollster",
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -3596,9 +3590,9 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "faer",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "glam",
- "pollster 0.4.0",
+ "pollster",
  "rayon",
  "serde",
  "thiserror 2.0.21",
@@ -3614,7 +3608,7 @@ dependencies = [
  "eframe",
  "glam",
  "image",
- "pollster 0.4.0",
+ "pollster",
  "rfd",
  "serde",
  "serde_json",
@@ -3629,7 +3623,7 @@ dependencies = [
 name = "uvcraft-bridge"
 version = "0.1.1"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "serde_json",
  "uvcraft-commands",
  "uvcraft-core",
