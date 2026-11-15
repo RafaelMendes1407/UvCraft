@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use uvcraft_commands::{Command, Outcome, Session};
 
 pub fn serve(bind: &str) -> Result<(), String> {
-    let listener = TcpListener::bind(bind).map_err(|e| format!("bind {bind}: {e}"))?;
+    let address = uvcraft_bridge::loopback_addr(bind)?;
+    let listener = TcpListener::bind(address).map_err(|e| format!("bind {bind}: {e}"))?;
     eprintln!(
         "UvCraft JSON-RPC listening on {}",
         listener.local_addr().map_err(|e| e.to_string())?
@@ -149,6 +150,14 @@ fn handle_request(session: &mut Session, req: Value) -> Option<Value> {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn non_loopback_addresses_are_rejected() {
+        for bind in ["0.0.0.0:0", "192.0.2.1:0", "[::]:0"] {
+            let error = serve(bind).unwrap_err();
+            assert!(error.contains("loopback"), "{bind}: {error}");
+        }
+    }
 
     #[test]
     fn oversized_request_is_rejected_and_closes_the_connection() {

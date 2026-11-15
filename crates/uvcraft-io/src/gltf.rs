@@ -254,10 +254,11 @@ pub(crate) fn build_glb(json: &[u8], bin: Option<&[u8]>, extra: &[(u32, Vec<u8>)
 // ---------------------------------------------------------------- URIs
 
 /// Resolves an external buffer URI against the asset's directory. Only
-/// relative references to regular files are accepted: absolute paths, URI
-/// schemes (`file:`, `http:`, ...) and device files or FIFOs (`/dev/zero`
-/// would never finish reading) are rejected, so an untrusted asset cannot
-/// make the loader read, and a later `.glb` save embed, an arbitrary file.
+/// regular files inside that directory are accepted: absolute paths, URI
+/// schemes (`file:`, `http:`, ...), `..` segments, symlinks leading outside
+/// it and device files or FIFOs (`/dev/zero` would never finish reading) are
+/// rejected, so an untrusted asset cannot make the loader read, and a later
+/// `.glb` save embed, an arbitrary file.
 fn external_buffer_path(base_dir: &Path, uri: &str) -> Result<PathBuf, String> {
     let decoded = percent_decode(uri);
     let has_scheme = decoded.split_once(':').is_some_and(|(scheme, _)| {
@@ -274,16 +275,28 @@ fn external_buffer_path(base_dir: &Path, uri: &str) -> Result<PathBuf, String> {
         || relative.has_root()
         || relative
             .components()
-            .any(|c| matches!(c, std::path::Component::Prefix(_)))
+            .any(|c| matches!(c, Component::Prefix(_) | Component::ParentDir))
     {
         return Err(format!(
-            "unsupported external URI {uri:?} (must be a relative path)"
+            "unsupported external URI {uri:?} (must be a path inside the asset's folder)"
         ));
     }
     let path = base_dir.join(relative);
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{} is not a regular file", path.display()));
+    }
+    let real = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let root = base_dir
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", base_dir.display()))?;
+    if !real.starts_with(&root) {
+        return Err(format!(
+            "{} leads outside the asset's folder",
+            path.display()
+        ));
     }
     Ok(path)
 }
@@ -2379,11 +2392,22 @@ mod tests {
             "sub",
             "missing.bin",
             "a%00b.bin",
+            "../sibling.bin",
+            "sub/../sub/data%20file.bin",
+            "sub/%2E%2E/%2E%2E/x.bin",
         ] {
             assert!(external_buffer_path(&dir, uri).is_err(), "{uri}");
         }
         #[cfg(unix)]
-        assert!(external_buffer_path(&dir, "../../../../../../../../dev/zero").is_err());
+        {
+            assert!(external_buffer_path(&dir, "../../../../../../../../dev/zero").is_err());
+            let outside =
+                std::env::temp_dir().join(format!("uvcraft-gltf-out-{}.bin", std::process::id()));
+            std::fs::write(&outside, [0u8; 4]).unwrap();
+            std::os::unix::fs::symlink(&outside, dir.join("link.bin")).unwrap();
+            assert!(external_buffer_path(&dir, "link.bin").is_err());
+            let _ = std::fs::remove_file(outside);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

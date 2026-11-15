@@ -27,7 +27,7 @@ enum Cmd {
     },
     /// Serve JSON-RPC 2.0 requests over a line-delimited TCP connection.
     Serve {
-        /// Address to listen on (defaults to loopback only).
+        /// Loopback address and port; non-loopback addresses are rejected.
         #[arg(long, default_value = "127.0.0.1:8765")]
         bind: String,
     },
