@@ -217,10 +217,14 @@ impl IslandGroups {
         let id = self.next_id;
         self.next_id += 1;
         const COLORS: [[u8; 4]; 8] = [
-            [128, 180, 240, 255], [245, 165, 95, 255],
-            [155, 215, 135, 255], [215, 145, 210, 255],
-            [105, 210, 205, 255], [245, 205, 100, 255],
-            [175, 165, 245, 255], [240, 130, 145, 255],
+            [128, 180, 240, 255],
+            [245, 165, 95, 255],
+            [155, 215, 135, 255],
+            [215, 145, 210, 255],
+            [105, 210, 205, 255],
+            [245, 205, 100, 255],
+            [175, 165, 245, 255],
+            [240, 130, 145, 255],
         ];
         self.groups.insert(
             id,
@@ -455,7 +459,10 @@ mod tests {
         let mut groups = IslandGroups::new(2);
         let first = groups.create("First", None, &[], &[0], &islands).unwrap();
         let second = groups.create("Second", None, &[], &[1], &islands).unwrap();
-        assert_ne!(groups.get(first).unwrap().color, groups.get(second).unwrap().color);
+        assert_ne!(
+            groups.get(first).unwrap().color,
+            groups.get(second).unwrap().color
+        );
         assert_ne!(groups.face_color(0), groups.face_color(1));
     }
 

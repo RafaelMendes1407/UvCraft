@@ -40,8 +40,11 @@ pub fn triangle_map(p: [DVec3; 3], u: [DVec2; 3]) -> Option<TriangleMap> {
         .length_squared()
         .max(e2.length_squared())
         .max((p[2] - p[1]).length_squared());
-    if !area_3d.is_finite() || !longest_3d.is_finite()
-        || area_3d <= DEGENERATE_EPS * longest_3d || longest_3d == 0.0 {
+    if !area_3d.is_finite()
+        || !longest_3d.is_finite()
+        || area_3d <= DEGENERATE_EPS * longest_3d
+        || longest_3d == 0.0
+    {
         return None;
     }
     let (d1, d2) = (u[1] - u[0], u[2] - u[0]);
@@ -50,8 +53,11 @@ pub fn triangle_map(p: [DVec3; 3], u: [DVec2; 3]) -> Option<TriangleMap> {
         .length_squared()
         .max(d2.length_squared())
         .max((u[2] - u[1]).length_squared());
-    if !uv_area.is_finite() || !longest_uv.is_finite()
-        || uv_area.abs() <= DEGENERATE_EPS * longest_uv || longest_uv == 0.0 {
+    if !uv_area.is_finite()
+        || !longest_uv.is_finite()
+        || uv_area.abs() <= DEGENERATE_EPS * longest_uv
+        || longest_uv == 0.0
+    {
         return None;
     }
 
@@ -76,8 +82,7 @@ pub fn triangle_map(p: [DVec3; 3], u: [DVec2; 3]) -> Option<TriangleMap> {
     // Product of singular values is |det J|. This avoids cancellation in
     // q - r for strongly anisotropic but otherwise valid mappings.
     let sigma_min = (uv_area / area_3d).abs() / sigma_max;
-    if !sigma_max.is_finite() || !sigma_min.is_finite()
-        || sigma_max <= 0.0 || sigma_min <= 0.0 {
+    if !sigma_max.is_finite() || !sigma_min.is_finite() || sigma_max <= 0.0 || sigma_min <= 0.0 {
         return None;
     }
     Some(TriangleMap {
@@ -103,7 +108,9 @@ pub struct DistortionValues {
 }
 
 pub fn distortion_values(map: TriangleMap, reference_scale: f64) -> Option<DistortionValues> {
-    if !reference_scale.is_finite() || reference_scale <= 0.0 { return None; }
+    if !reference_scale.is_finite() || reference_scale <= 0.0 {
+        return None;
+    }
     let major = map.sigma_max / reference_scale;
     let minor = map.sigma_min / reference_scale;
     if !major.is_finite() || !minor.is_finite() || major <= 0.0 || minor <= 0.0 {
@@ -113,14 +120,17 @@ pub fn distortion_values(map: TriangleMap, reference_scale: f64) -> Option<Disto
     let log_minor = minor.ln();
     let directional_log = if log_major.abs() >= log_minor.abs() {
         log_major
-    } else { log_minor };
+    } else {
+        log_minor
+    };
     let area = major * minor;
     let conformal = map.sigma_max / map.sigma_min;
     if !area.is_finite() || !conformal.is_finite() || !directional_log.is_finite() {
         return None;
     }
     Some(DistortionValues {
-        major, minor,
+        major,
+        minor,
         area,
         conformal,
         combined: log_major.abs().max(log_minor.abs()),
@@ -492,9 +502,12 @@ mod tests {
         let p = [DVec3::ZERO, DVec3::X, DVec3::Y];
         for scale in [0.5, 1.0, 2.0] {
             let theta: f64 = 0.73;
-            let rotate = |v: DVec2| DVec2::new(
-                v.x * theta.cos() - v.y * theta.sin(),
-                v.x * theta.sin() + v.y * theta.cos()) * scale;
+            let rotate = |v: DVec2| {
+                DVec2::new(
+                    v.x * theta.cos() - v.y * theta.sin(),
+                    v.x * theta.sin() + v.y * theta.cos(),
+                ) * scale
+            };
             let m = triangle_map(p, [DVec2::ZERO, rotate(DVec2::X), rotate(DVec2::Y)]).unwrap();
             let d = distortion_values(m, 1.0).unwrap();
             assert!(approx(d.major, scale) && approx(d.minor, scale));

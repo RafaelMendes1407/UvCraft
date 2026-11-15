@@ -108,7 +108,9 @@ fn default_tolerance() -> f64 {
     0.05
 }
 
-fn default_max_stack_distortion() -> f64 { 4.0 }
+fn default_max_stack_distortion() -> f64 {
+    4.0
+}
 fn default_weld_tolerance() -> f64 {
     0.001
 }
@@ -1152,8 +1154,11 @@ impl Session {
                     doc.islands = Some(islands);
                 }
                 if doc.uv != before.uv && doc.stack_relations.group_count() > 0 {
-                    let islands = doc.islands.get_or_insert_with(|| Islands::compute(&doc.mesh, &doc.uv));
-                    doc.stack_relations.retain_valid(&doc.mesh, &doc.uv, islands);
+                    let islands = doc
+                        .islands
+                        .get_or_insert_with(|| Islands::compute(&doc.mesh, &doc.uv));
+                    doc.stack_relations
+                        .retain_valid(&doc.mesh, &doc.uv, islands);
                 }
                 if doc.uv != before.uv
                     || doc.pins != before.pins
@@ -3512,34 +3517,59 @@ impl Session {
             } => {
                 check_tolerance(*tolerance)?;
                 if !max_distortion.is_finite() || *max_distortion < 1.0 {
-                    return Err(CommandError::InvalidArgument("max_distortion must be finite and at least 1".into()));
+                    return Err(CommandError::InvalidArgument(
+                        "max_distortion must be finite and at least 1".into(),
+                    ));
                 }
                 if *preview {
                     let doc = self.doc_mut()?;
                     let mut targets = resolve_pack_islands(doc, islands)?;
                     if let Some(reference) = reference {
                         let Some(pos) = targets.iter().position(|&i| i == *reference) else {
-                            return Err(CommandError::InvalidArgument("reference island is outside the selection".into()));
+                            return Err(CommandError::InvalidArgument(
+                                "reference island is outside the selection".into(),
+                            ));
                         };
                         targets.swap(0, pos);
                     }
-                    let isl = doc.islands.as_ref().expect("computed by resolve_pack_islands");
+                    let isl = doc
+                        .islands
+                        .as_ref()
+                        .expect("computed by resolve_pack_islands");
                     let r = if *conform {
                         let mut copy = doc.uv.clone();
                         if reference.is_some() {
-                            stack::stack_conform_to_reference(&doc.mesh, &mut copy, isl,
-                                &targets, *mode, *tolerance, *max_distortion)
+                            stack::stack_conform_to_reference(
+                                &doc.mesh,
+                                &mut copy,
+                                isl,
+                                &targets,
+                                *mode,
+                                *tolerance,
+                                *max_distortion,
+                            )
                         } else {
-                            stack::stack_conform(&doc.mesh, &mut copy, isl,
-                                &targets, *mode, *tolerance, *max_distortion)
+                            stack::stack_conform(
+                                &doc.mesh,
+                                &mut copy,
+                                isl,
+                                &targets,
+                                *mode,
+                                *tolerance,
+                                *max_distortion,
+                            )
                         }
                     } else if reference.is_some() {
-                        stack::preview_to_reference(&doc.mesh, &doc.uv, isl, &targets, *mode, *tolerance)
+                        stack::preview_to_reference(
+                            &doc.mesh, &doc.uv, isl, &targets, *mode, *tolerance,
+                        )
                     } else {
                         stack::preview(&doc.mesh, &doc.uv, isl, &targets, *mode, *tolerance)
                     };
-                    return Ok(Outcome::Info(format!("stack preview: {:?}; matches: {:?}; failed: {:?}",
-                        r.groups, r.matches, r.failed)));
+                    return Ok(Outcome::Info(format!(
+                        "stack preview: {:?}; matches: {:?}; failed: {:?}",
+                        r.groups, r.matches, r.failed
+                    )));
                 }
                 return self.edit(|doc| {
                     progress.report("stack", 0, 1)?;
@@ -5517,19 +5547,25 @@ o a\nf 1/1 2/2 3/3 4/4\no b\nf 5/5 6/6 7/7 8/8\no c\nf 9/9 10/10 11/11 12/12\n";
     fn stack_preview_reference_and_individual_edit_invalidate_relation() {
         let (mut session, _dir) = session();
         let before = uvs(&session);
-        let preview = parse_script(r#"{"cmd":"stack","islands":[0,1],"mode":"similar","reference":1,"preview":true}"#)
-            .unwrap().remove(0);
+        let preview = parse_script(
+            r#"{"cmd":"stack","islands":[0,1],"mode":"similar","reference":1,"preview":true}"#,
+        )
+        .unwrap()
+        .remove(0);
         let outcome = session.execute(preview).unwrap();
         assert!(matches!(outcome, Outcome::Info(ref msg) if msg.contains("reference: 1")));
         assert_eq!(uvs(&session), before);
         assert_eq!(session.document().unwrap().stack_group_count(), 0);
-        let stack = parse_script(r#"{"cmd":"stack","islands":[0,1],"mode":"similar","reference":1}"#)
-            .unwrap().remove(0);
+        let stack =
+            parse_script(r#"{"cmd":"stack","islands":[0,1],"mode":"similar","reference":1}"#)
+                .unwrap()
+                .remove(0);
         session.execute(stack).unwrap();
         assert_eq!(&uvs(&session)[4..8], &before[4..8]);
         assert_eq!(session.document().unwrap().stack_group_count(), 1);
         let move_one = parse_script(r#"{"cmd":"transform","islands":[0],"translate":[0.3,0]}"#)
-            .unwrap().remove(0);
+            .unwrap()
+            .remove(0);
         session.execute(move_one).unwrap();
         assert_eq!(session.document().unwrap().stack_group_count(), 0);
         session.execute(Command::Undo).unwrap();
@@ -5538,9 +5574,18 @@ o a\nf 1/1 2/2 3/3 4/4\no b\nf 5/5 6/6 7/7 8/8\no c\nf 9/9 10/10 11/11 12/12\n";
 
     #[test]
     fn reference_image_outline_survives_stack_undo_save_and_reopen() {
-        let outline = [(1.0, 5.0), (3.0, 5.0), (3.0, 3.0),
-            (4.0, 1.8), (4.0, 0.5), (4.4, 0.0), (0.0, 0.0),
-            (0.4, 0.5), (0.4, 1.8), (1.0, 3.0)];
+        let outline = [
+            (1.0, 5.0),
+            (3.0, 5.0),
+            (3.0, 3.0),
+            (4.0, 1.8),
+            (4.0, 0.5),
+            (4.4, 0.0),
+            (0.0, 0.0),
+            (0.4, 0.5),
+            (0.4, 1.8),
+            (1.0, 3.0),
+        ];
         let mut first = vec![(2.0, 5.0)];
         first.extend(outline[1..].iter().chain(&outline[..1]).copied());
         let mut points = first.clone();
@@ -5548,15 +5593,23 @@ o a\nf 1/1 2/2 3/3 4/4\no b\nf 5/5 6/6 7/7 8/8\no c\nf 9/9 10/10 11/11 12/12\n";
         points.push((2.0, 2.0));
         let mut obj = String::new();
         for (i, &(x, y)) in points.iter().enumerate() {
-            obj.push_str(&format!("v {x} {y} {}\n", if i < first.len() { 0 } else { 2 }));
+            obj.push_str(&format!(
+                "v {x} {y} {}\n",
+                if i < first.len() { 0 } else { 2 }
+            ));
         }
         for (i, &(x, y)) in points.iter().enumerate() {
-            let (u, v) = if i < first.len() { (x, y) }
-                else { (-y * 0.7 + 10.0, x * 0.7 + 3.0) };
+            let (u, v) = if i < first.len() {
+                (x, y)
+            } else {
+                (-y * 0.7 + 10.0, x * 0.7 + 3.0)
+            };
             obj.push_str(&format!("vt {u} {v}\n"));
         }
         obj.push_str("o reference\nf");
-        for i in 1..=first.len() { obj.push_str(&format!(" {i}/{i}")); }
+        for i in 1..=first.len() {
+            obj.push_str(&format!(" {i}/{i}"));
+        }
         obj.push('\n');
         obj.push_str("o target\n");
         let center = points.len();
@@ -5571,8 +5624,13 @@ o a\nf 1/1 2/2 3/3 4/4\no b\nf 5/5 6/6 7/7 8/8\no c\nf 9/9 10/10 11/11 12/12\n";
         session.execute(Command::Load { path }).unwrap();
         let positions = session.document().unwrap().mesh.positions().to_vec();
         let before = uvs(&session);
-        session.execute(parse_script(r#"{"cmd":"stack","mode":"similar","reference":0,"tolerance":0.01}"#)
-            .unwrap().remove(0)).unwrap();
+        session
+            .execute(
+                parse_script(r#"{"cmd":"stack","mode":"similar","reference":0,"tolerance":0.01}"#)
+                    .unwrap()
+                    .remove(0),
+            )
+            .unwrap();
         assert_eq!(session.document().unwrap().stack_group_count(), 1);
         let stacked = uvs(&session);
         assert_eq!(session.document().unwrap().mesh.positions(), positions);
@@ -5584,9 +5642,13 @@ o a\nf 1/1 2/2 3/3 4/4\no b\nf 5/5 6/6 7/7 8/8\no c\nf 9/9 10/10 11/11 12/12\n";
         session.execute(Command::Redo).unwrap();
         assert_eq!(uvs(&session), stacked);
         let saved = dir.0.join("stacked_profile.obj");
-        session.execute(Command::Save { path: saved.clone() }).unwrap();
-        let sidecar: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(sidecar_path(&saved)).unwrap()).unwrap();
+        session
+            .execute(Command::Save {
+                path: saved.clone(),
+            })
+            .unwrap();
+        let sidecar: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(sidecar_path(&saved)).unwrap()).unwrap();
         assert_eq!(sidecar["group_tolerances_ppm"][0], 10_000);
         let mut reopened = Session::new();
         reopened.execute(Command::Load { path: saved }).unwrap();
@@ -6328,15 +6390,30 @@ o a\nf 1/1 2/2 3/3 4/4\no b\nf 5/5 6/6 7/7 8/8\no c\nf 9/9 10/10 11/11 12/12\n";
     #[test]
     fn contour_stack_keeps_uv_group_membership_through_pack() {
         let (mut session, _dir) = session();
-        session.execute(Command::CreateIslandGroup {
-            name: "Layout".into(), parent: None, children: vec![], islands: vec![0, 1],
-        }).unwrap();
-        session.execute(parse_script(r#"{"cmd":"stack","mode":"similar","reference":1}"#)
-            .unwrap().remove(0)).unwrap();
+        session
+            .execute(Command::CreateIslandGroup {
+                name: "Layout".into(),
+                parent: None,
+                children: vec![],
+                islands: vec![0, 1],
+            })
+            .unwrap();
+        session
+            .execute(
+                parse_script(r#"{"cmd":"stack","mode":"similar","reference":1}"#)
+                    .unwrap()
+                    .remove(0),
+            )
+            .unwrap();
         assert_eq!(session.document().unwrap().island_groups().group_count(), 1);
         assert_eq!(session.document().unwrap().stack_group_count(), 1);
-        session.execute(parse_script(r#"{"cmd":"pack","resolution":128,"quality":"low"}"#)
-            .unwrap().remove(0)).unwrap();
+        session
+            .execute(
+                parse_script(r#"{"cmd":"pack","resolution":128,"quality":"low"}"#)
+                    .unwrap()
+                    .remove(0),
+            )
+            .unwrap();
         let doc = session.document().unwrap();
         assert_eq!(doc.island_groups().group_count(), 1);
         assert_eq!(doc.stack_group_count(), 1);

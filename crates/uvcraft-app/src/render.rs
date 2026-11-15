@@ -672,11 +672,14 @@ impl Renderer {
         wire: &[[f32; 2]],
         edges: &[[f32; 2]],
     ) -> bool {
-        if self.tris.as_ref().map_or(!colors.is_empty(), |mesh|
-            mesh.count as usize != colors.len()) {
+        if self.tris.as_ref().map_or(!colors.is_empty(), |mesh| {
+            mesh.count as usize != colors.len()
+        }) {
             return false;
         }
-        if !self.set_scene_uvs(rs, tris, wire, edges) { return false; }
+        if !self.set_scene_uvs(rs, tris, wire, edges) {
+            return false;
+        }
         if let Some(mesh) = &mut self.tris {
             mesh.color.stream(rs, bytemuck::cast_slice(colors));
         }
@@ -813,7 +816,12 @@ impl Renderer {
                 p.checker_cells,
                 if p.uv_mode { 0.0 } else { 2e-4 },
             ],
-            light: [p.light[0], p.light[1], p.light[2], f32::from(u8::from(p.heatmap))],
+            light: [
+                p.light[0],
+                p.light[1],
+                p.light[2],
+                f32::from(u8::from(p.heatmap)),
+            ],
         };
         rs.queue
             .write_buffer(&v.uniform, 0, bytemuck::bytes_of(&uniforms));
@@ -899,9 +907,14 @@ mod tests {
     fn distortion_shader_compiles_for_both_viewports() {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::PRIMARY));
-        let Some(adapter) = adapters.into_iter().next() else { return; };
-        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor::default())) else { return; };
+        let Some(adapter) = adapters.into_iter().next() else {
+            return;
+        };
+        let Ok((device, _queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            return;
+        };
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("uvcraft distortion shader validation"),
