@@ -8464,6 +8464,7 @@ impl eframe::App for App {
 
         if self.show_preferences {
             let mut reset = false;
+            let mut erase = false;
             let mut save_layout = false;
             let mut load_layout = None;
             let mut delete_layout = None;
@@ -8649,7 +8650,16 @@ impl eframe::App for App {
                             }
                         }
                     });
-                    reset = ui.button("Reset defaults").clicked();
+                    ui.horizontal(|ui| {
+                        reset = ui.button("Reset defaults").clicked();
+                        erase = ui
+                            .button("Clear saved data")
+                            .on_hover_text(
+                                "Delete the preferences file, including saved selection sets, \
+                                 layout presets and recently used mesh/texture paths",
+                            )
+                            .clicked();
+                    });
                 });
             if save_layout {
                 let name = self.layout_name.trim().to_owned();
@@ -8669,6 +8679,14 @@ impl eframe::App for App {
             }
             if reset {
                 self.apply_preferences(&Preferences::default());
+            }
+            if erase {
+                self.apply_preferences(&Preferences::default());
+                self.saved_prefs = Preferences::default();
+                match self.prefs_path.as_deref().map(Preferences::clear) {
+                    Some(Err(e)) => self.set_status(format!("could not clear preferences: {e}")),
+                    _ => self.set_status("cleared saved preferences".into()),
+                }
             }
         }
         let current_prefs = self.preferences();
