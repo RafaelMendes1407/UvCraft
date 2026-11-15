@@ -1,0 +1,45 @@
+[workspace]
+members = ["."]
+
+[package]
+name = "uvcraft-security-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+uvcraft-io = { path = "../crates/uvcraft-io" }
+uvcraft-commands = { path = "../crates/uvcraft-commands" }
+
+[[bin]]
+name = "obj_parse"
+path = "fuzz_targets/obj_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gltf_parse"
+path = "fuzz_targets/gltf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fbx_parse"
+path = "fuzz_targets/fbx_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "command_script"
+path = "fuzz_targets/command_script.rs"
+test = false
+doc = false
+bench = false

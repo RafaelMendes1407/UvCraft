@@ -1,0 +1,4 @@
+{"cmd":"auto_seams","angle_deg":60}
+{"cmd":"pack","padding_px":4,"method":"raster","region":[0,0,1,1]}
+# c
+{"cmd":"transform","islands":[0],"rotate_deg":90}
