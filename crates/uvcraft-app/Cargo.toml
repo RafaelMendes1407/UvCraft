@@ -28,4 +28,4 @@ uvcraft-bridge.workspace = true
 workspace = true
 
 [dev-dependencies]
-pollster = "0.4"
+pollster = "1.0"
